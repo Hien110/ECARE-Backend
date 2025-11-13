@@ -2,5 +2,6 @@ node_modules
 .env
 test
 
+package-lock.json
 # Firebase service account key (sensitive)
 src/config/ecare-7896e-firebase-adminsdk-fbsvc-22e0164edd.json
