@@ -1,0 +1,13 @@
+{
+  "name": "erd-generator",
+  "version": "1.0.0",
+  "description": "Generate ERD image from Mermaid diagram",
+  "main": "generate_erd_image.js",
+  "scripts": {
+    "generate-erd": "node generate_erd_image.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  }
+}
+

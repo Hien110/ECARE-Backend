@@ -1,0 +1,53 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon --inspect src/index.js",
+    "start": "node src/index.js",
+    "test": "mocha \"test/**/*.test.js\" --timeout 10000"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "^1.22.0",
+    "agora-token": "^2.0.5",
+    "axios": "^1.11.0",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.2",
+    "body-parser": "^2.2.0",
+    "cloudinary": "^2.7.0",
+    "connect-mongo": "^5.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "express-session": "^1.18.2",
+    "firebase-admin": "^13.5.0",
+    "groq-sdk": "^0.33.0",
+    "jsonwebtoken": "^9.0.2",
+    "method-override": "^3.0.0",
+    "moment-timezone": "^0.6.0",
+    "mongodb": "^6.18.0",
+    "mongoose": "^8.17.0",
+    "morgan": "^1.10.1",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.5",
+    "nodemon": "^3.1.10",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "react-markdown": "^10.1.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "tesseract.js": "^6.0.1",
+    "twilio": "^5.8.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "mocha": "^11.7.1",
+    "supertest": "^7.1.4"
+  }
+}
