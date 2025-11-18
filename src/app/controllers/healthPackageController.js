@@ -33,7 +33,11 @@ const healthPackageController = {
   // Lấy danh sách tất cả gói khám
    listHealthPackage: async (req, res) => {
     try {
-      const packages = await HealthPackage.find().sort({ createdAt: -1 });
+      // Tìm các gói khám chưa có đăng ký nào
+      // Sử dụng đúng trường packageRef để lấy các gói đã đăng ký
+      const RegistrationHealthPackage = require('../models/RegistrationHealthPackage');
+      const registeredIds = await RegistrationHealthPackage.distinct('packageRef');
+      const packages = await HealthPackage.find({ _id: { $nin: registeredIds } }).sort({ createdAt: -1 });
       return res.status(200).json({ success: true, data: packages });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Lỗi khi lấy danh sách gói khám" });
