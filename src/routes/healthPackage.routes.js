@@ -6,9 +6,9 @@ const healthPackageController = require("../app/controllers/healthPackageControl
 router.use(authenticateToken);
 
 router.post("/health-packages", healthPackageController.createHealthPackage);
-router.get("/health-packages", healthPackageController.listHealthPackage);
-router.get("/health-packages/:id", healthPackageController.detailHealthPackage);
-router.put("/health-packages/:id", healthPackageController.updateHealthPackage);
-router.delete("/health-packages/:id", healthPackageController.removeHealthPackage);
+router.get("/", healthPackageController.listHealthPackage);
+router.get("/:id", healthPackageController.detailHealthPackage);
+router.put("/update-package/:id", healthPackageController.updateHealthPackage);
+router.delete("/delete-packages/:id", healthPackageController.removeHealthPackage);
 
 module.exports = router;

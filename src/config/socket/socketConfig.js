@@ -6,6 +6,7 @@ class SocketConfig {
   constructor() {
     this.io = null;
     this.connectedUsers = new Map(); // Map để lưu userId -> socketId
+    this.activeCallUsers = new Map(); // Map để lưu userId -> callId (track users đang trong cuộc gọi)
   }
 
   init(server) {
@@ -256,6 +257,21 @@ class SocketConfig {
           requestedBy: socket.userId // Log người gửi request
         });
 
+        // ⚠️ KIỂM TRA CALLEE ĐANG TRONG CUỘC GỌI KHÁC KHÔNG
+        if (this.activeCallUsers.has(calleeId)) {
+          const existingCallId = this.activeCallUsers.get(calleeId);
+          console.log(`⚠️ Callee ${calleeId} is already in another call: ${existingCallId}`);
+          
+          // Thông báo cho caller rằng callee đang bận
+          socket.emit('video_call_busy', {
+            callId,
+            calleeId,
+            message: 'Người dùng đang có cuộc gọi khác'
+          });
+          
+          return; // Không xử lý tiếp
+        }
+
         // IMPORTANT: Chỉ gửi notification cho CALLEE, KHÔNG gửi cho CALLER
         // Caller đã ở trong app rồi nên không cần notification
         
@@ -329,6 +345,11 @@ class SocketConfig {
       const { callId, conversationId, callerId } = data;
       console.log('✅ Video call accepted:', { callId, callerId });
 
+      // Đánh dấu cả caller và callee đang trong cuộc gọi
+      this.activeCallUsers.set(callerId, callId);
+      this.activeCallUsers.set(socket.userId, callId); // callee
+      console.log(`📞 Active call users updated: ${callerId}, ${socket.userId}`);
+
       // Thông báo cho caller rằng cuộc gọi đã được chấp nhận
       this.emitToUser(callerId, 'video_call_accepted', {
         callId,
@@ -341,6 +362,10 @@ class SocketConfig {
     socket.on('video_call_rejected', (data) => {
       const { callId, conversationId, callerId } = data;
       console.log('❌ Video call rejected received:', { callId, callerId, rejectedBy: socket.userId });
+
+      // Xóa khỏi active calls (nếu có)
+      this.activeCallUsers.delete(callerId);
+      this.activeCallUsers.delete(socket.userId);
 
       // Kiểm tra xem caller có online không
       const callerOnline = this.isUserOnline(callerId);
@@ -364,6 +389,10 @@ class SocketConfig {
       const { callId, conversationId, calleeId } = data;
       console.log('🚫 Video call cancelled received:', { callId, calleeId, cancelledBy: socket.userId });
 
+      // Xóa khỏi active calls (nếu có)
+      this.activeCallUsers.delete(socket.userId); // caller
+      this.activeCallUsers.delete(calleeId);
+
       // Kiểm tra xem callee có online không
       const calleeOnline = this.isUserOnline(calleeId);
       console.log('📡 Callee online status:', { calleeId, isOnline: calleeOnline });
@@ -384,6 +413,13 @@ class SocketConfig {
     socket.on('video_call_ended', (data) => {
       const { callId, conversationId, otherUserId } = data;
       console.log('👋 Video call ended received:', { callId, otherUserId, endedBy: socket.userId });
+
+      // Xóa cả 2 users khỏi active calls
+      this.activeCallUsers.delete(socket.userId);
+      if (otherUserId) {
+        this.activeCallUsers.delete(otherUserId);
+      }
+      console.log(`📞 Active call users removed: ${socket.userId}${otherUserId ? `, ${otherUserId}` : ''}`);
 
       // Thông báo cho người còn lại rằng cuộc gọi đã kết thúc
       if (otherUserId) {
@@ -409,6 +445,7 @@ class SocketConfig {
   handleDisconnect(socket) {
     socket.on('disconnect', () => {
       this.connectedUsers.delete(socket.userId);
+      this.activeCallUsers.delete(socket.userId); // Cleanup active call khi disconnect
       console.log(`👋 User disconnected: ${socket.user.fullName} (${socket.userId})`);
     });
   }
