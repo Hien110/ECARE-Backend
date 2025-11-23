@@ -113,7 +113,7 @@ const DoctorBookingController = {
     try {
       const packages = await HealthPackage.find({ isActive: true })
         .select(
-          "title durationOptions customDuration price service description isActive",
+          "title durationDays durations price service description isActive",
         )
         .sort({ createdAt: -1 })
         .lean();
@@ -138,7 +138,9 @@ const DoctorBookingController = {
           .json({ success: false, message: "Thiếu id gói khám" });
       }
 
-      const pkg = await HealthPackage.findById(id).lean();
+      const pkg = await HealthPackage.findById(id)
+      .select("title durationDays durations price service description isActive")
+      .lean();
       if (!pkg || !pkg.isActive) {
         return res
           .status(404)
@@ -240,7 +242,8 @@ getAvailableDoctors: async (req, res) => {
             _id: pkg._id,
             title: pkg.title,
             price: pkg.price,
-            durationOptions: pkg.durationOptions,
+            durationDays: pkg.durationDays,
+            durations: pkg.durations,
           },
           period: { start, end, durationDays },
           doctors: [],
