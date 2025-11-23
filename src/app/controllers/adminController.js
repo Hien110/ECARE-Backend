@@ -173,7 +173,6 @@ const decryptUserData = (users) => {
 
         return userObj;
       } catch (userErr) {
-        console.error('❌ [decryptUserData] Error processing user:', userErr);
         // Return user as-is if decryption fails
         const userObj = user.toObject ? user.toObject() : user;
         delete userObj.phoneNumberEnc;
@@ -186,7 +185,6 @@ const decryptUserData = (users) => {
       }
     }).filter(u => u !== null);
   } catch (err) {
-    console.error('❌ [decryptUserData] Fatal error:', err);
     // Return users as-is if decryption completely fails
     return users.map(user => {
       const userObj = user.toObject ? user.toObject() : user;
@@ -219,7 +217,6 @@ const parseDateFromExcel = (dateInput) => {
   
   // If it's already a Date object
   if (dateInput instanceof Date) {
-    console.log(`🔍 [parseDateFromExcel] Already Date object:`, dateInput);
     return isNaN(dateInput.getTime()) ? null : dateInput;
   }
   

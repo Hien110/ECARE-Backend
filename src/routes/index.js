@@ -16,7 +16,7 @@ const deadmanRoutes = require('./deadman.routes');
 
 const supporterServiceRoutes = require('./supporterServices.routes');
 const transcribetionRoutes = require('./transcription.routes');
-
+const healthPackageRoutes = require('./healthPackage.routes');
 function route(app) {
     app.use('/api/users', userRoutes);
     app.use('/api/relationships', relationshipRoutes);
@@ -39,6 +39,7 @@ function route(app) {
     app.use('/api/supporter-services', supporterServiceRoutes);
 
     app.use('/api/transcriptions', transcribetionRoutes);
+    app.use('/api/health-packages', healthPackageRoutes);
 }
 
 module.exports = route;
