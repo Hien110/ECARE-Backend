@@ -83,74 +83,90 @@ const DeadmanController = {
   },
 
   checkin: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) => DEBUG && console.log(`[DEADMAN][checkin][#${reqId}]`, ...args);
+  const DEBUG = process.env.NODE_ENV !== "production";
+  const reqId = Math.random().toString(36).slice(2, 8);
+  const log = (...args) =>
+    DEBUG && console.log(`[DEADMAN][checkin][#${reqId}]`, ...args);
 
-    try {
-      const elderId = req.user?.userId || req.user?._id;
-      const role = (req.user?.role || "").toLowerCase();
-      if (!elderId) {
-        log("❌ Missing elderId (token/middleware issue)");
-        return res.status(401).json({ success: false, message: "Unauthorized" });
-      }
+  try {
+    const elderId = req.user?.userId || req.user?._id;
+    const role = (req.user?.role || "").toLowerCase();
 
-      log("➡️ CHECK-IN request", { elderId, role });
+    if (!elderId) {
+      log("❌ Missing elderId (token/middleware issue)");
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized" });
+    }
 
-      // Chỉ cho phép Elderly tự check-in
-      if (role !== "elderly") {
-        log("⛔ Reject: user is not elderly");
-        return res.status(403).json({
-          success: false,
-          message: "Chỉ tài khoản Người cao tuổi mới được check-in.",
-        });
-      }
+    log("➡️ CHECK-IN request", { elderId, role });
 
-      // Tự tạo ElderlyProfile nếu chưa có
-      let prof = await ElderlyProfile.findOne({ user: elderId }).lean();
-      if (!prof) {
-        log("ℹ️ No ElderlyProfile found — creating with defaults");
-        try {
-          const created = await ElderlyProfile.create({ user: elderId });
-          prof = created?.toObject?.() || created;
-          log("✅ ElderlyProfile created:", { id: prof?._id });
-        } catch (e) {
-          console.error("[DEADMAN][checkin][createProfile][ERROR]:", e?.message || e);
-          return res.status(500).json({
-            success: false,
-            message: "Không thể tạo hồ sơ ElderlyProfile cho người dùng.",
-          });
-        }
-      }
-
-      const now = new Date();
-      const upd = await ElderlyProfile.updateOne(
-        { user: elderId },
-        {
-          $set: {
-            "safetyMonitoring.deadmanState.lastCheckinAt": now,
-            "safetyMonitoring.deadmanState.lastReminderAt": null,
-            "safetyMonitoring.deadmanState.lastAlertAt": null,
-          },
-        }
-      );
-
-      log("📝 Mongo update:", { matched: upd.matchedCount, modified: upd.modifiedCount });
-
-      if (upd.matchedCount === 0) {
-        log("❌ Matched=0 ngay sau khi create? Unexpected.");
-        return res.status(500).json({ success: false, message: "Không thể cập nhật trạng thái an toàn." });
-      }
-
-      return res.json({ success: true, data: { lastCheckinAt: now } });
-    } catch (err) {
-      console.error("[DEADMAN][checkin][ERROR]:", err?.message || err);
-      return res.status(500).json({
+    // Chỉ cho phép Elderly tự check-in
+    if (role !== "elderly") {
+      log("⛔ Reject: user is not elderly");
+      return res.status(403).json({
         success: false,
-        message: "Không thể thực hiện check-in (Lỗi server).",
+        message: "Chỉ tài khoản Người cao tuổi mới được check-in.",
       });
     }
-  },
+
+    const now = new Date();
+
+    // ✅ Cập nhật trạng thái Deadman, upsert để đảm bảo luôn có ElderlyProfile
+    const updateSet = {
+      "safetyMonitoring.deadmanState.lastCheckinAt": now,
+      "safetyMonitoring.deadmanState.lastReminderAt": null,
+      "safetyMonitoring.deadmanState.lastAlertAt": null,
+      "safetyMonitoring.deadmanState.snoozeUntil": null, // bỏ snooze khi đã check-in
+    };
+
+    const updatedProf = await ElderlyProfile.findOneAndUpdate(
+      { user: elderId },
+      { $set: updateSet },
+      {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+      }
+    ).lean();
+
+    if (!updatedProf) {
+      log("❌ findOneAndUpdate returned null");
+      return res.status(500).json({
+        success: false,
+        message: "Không thể cập nhật trạng thái an toàn.",
+      });
+    }
+
+    const deadmanState =
+      updatedProf.safetyMonitoring?.deadmanState || {};
+    const deadmanConfig =
+      updatedProf.safetyMonitoring?.deadmanConfig || {};
+
+    log("📝 Deadman state updated OK", {
+      lastCheckinAt: deadmanState.lastCheckinAt,
+    });
+
+    // ✅ Trả về đủ thông tin để tất cả thiết bị đồng bộ
+    return res.json({
+      success: true,
+      data: {
+        lastCheckinAt: deadmanState.lastCheckinAt || now,
+        deadmanState,
+        deadmanConfig,
+      },
+    });
+  } catch (err) {
+    console.error(
+      "[DEADMAN][checkin][ERROR]:",
+      err?.message || err
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Không thể thực hiện check-in (Lỗi server).",
+    });
+  }
+},
 
   snooze: async (req, res) => {
     const DEBUG = process.env.NODE_ENV !== "production";
