@@ -121,13 +121,24 @@ class SOSCallService {
         timestamp: new Date().toISOString()
       };
 
-      // 1. Gửi qua Socket.IO nếu recipient đang online
-      if (this.socketConfig && this.socketConfig.isUserOnline(recipientId)) {
-        console.log(`🔌 Sending SOS call via Socket to ${recipient.fullName}`);
+      // STRATEGY GIỐNG VIDEO CALL THƯỜNG: GỬI CẢ SOCKET VÀ PUSH NOTIFICATION
+      // - Socket: Cho user đang online (nhanh, real-time)
+      // - Push: Cho user background/offline (reliable, luôn đến)
+      // Mobile sẽ tự xử lý dựa trên app state
+      
+      const isRecipientOnline = this.socketConfig && this.socketConfig.isUserOnline(recipientId);
+      console.log(`📡 Recipient (${recipientId}) socket status: ${isRecipientOnline ? 'CONNECTED' : 'DISCONNECTED'}`);
+
+      // 1. Thử gửi qua Socket.IO trước (nếu online)
+      if (isRecipientOnline) {
+        console.log(`🔌 Sending SOS call via SOCKET to ${recipient.fullName}`);
         this.socketConfig.emitToUser(recipientId, 'sos_call_request', callData);
       }
 
-      // 2. Gửi Push Notification (luôn gửi để cover background case)
+      // 2. LUÔN LUÔN gửi push notification (giống video call thường)
+      // Vì socket có thể connected nhưng app đang ở background
+      // Push notification đảm bảo user nhận được dù ở trạng thái nào
+      console.log(`📤 Sending PUSH notification to ${recipient.fullName} (regardless of socket status)`);
       await this.sendSOSCallNotification(callData, recipient);
 
       // 3. Set timeout 30 giây
@@ -153,7 +164,7 @@ class SOSCallService {
    */
   async sendSOSCallNotification(callData, recipient) {
     try {
-      const { sosId, callId, requester } = callData;
+      const { sosId, callId, requester, recipientIndex, totalRecipients } = callData;
 
       // Lấy FCM tokens
       const tokens = [];
@@ -179,9 +190,13 @@ class SOSCallService {
         requesterName: requester.fullName || 'Unknown',
         requesterAvatar: requester.avatar || '',
         requesterPhone: requester.phoneNumber || '',
+        recipientIndex: String(recipientIndex), // ✅ Lấy từ callData
+        totalRecipients: String(totalRecipients), // ✅ Lấy từ callData
         timestamp: new Date().toISOString(),
         clickAction: 'SOS_CALL_INCOMING'
       };
+
+      console.log('📦 FCM payload data:', JSON.stringify(data, null, 2));
 
       const admin = require('../config/firebase');
       const response = await admin.messaging().sendEachForMulticast({
@@ -189,7 +204,8 @@ class SOSCallService {
         data: data,
         android: {
           priority: 'high',
-          channelId: 'sos_emergency',
+          // ❌ KHÔNG dùng channelId ở đây - đây là thuộc tính của Notifee, không phải FCM
+          // Channel sẽ được xử lý bởi Notifee trong background handler
         },
         apns: {
           payload: {
@@ -206,9 +222,18 @@ class SOSCallService {
       });
 
       console.log(`✅ SOS call notification - Success: ${response.successCount}/${tokens.length}`);
+      
+      if (response.successCount > 0) {
+        console.log('✅ FCM sent successfully to tokens:', tokens.map(t => t.substring(0, 30) + '...'));
+      }
 
       if (response.failureCount > 0) {
         console.log(`⚠️ Some notifications failed: ${response.failureCount}`);
+        response.responses.forEach((resp, idx) => {
+          if (!resp.success) {
+            console.log(`❌ Token ${idx} failed:`, resp.error);
+          }
+        });
         await pushNotificationService.handleFailedTokens(response, tokens);
       }
 

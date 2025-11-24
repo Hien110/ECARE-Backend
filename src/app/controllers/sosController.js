@@ -334,3 +334,36 @@ exports.deleteSOSNotification = async (req, res) => {
     });
   }
 };
+
+/**
+ * Từ chối SOS call (từ notification background)
+ */
+exports.rejectSOSCall = async (req, res) => {
+  try {
+    const { sosId, callId } = req.body;
+    const recipientId = req.user._id || req.user.userId || req.user.id;
+
+    if (!sosId || !callId) {
+      return res.status(400).json({
+        success: false,
+        message: 'sosId and callId are required'
+      });
+    }
+
+    console.log(`📞 HTTP API: Rejecting SOS call ${callId} by ${recipientId}`);
+
+    // Gọi service để xử lý reject
+    await sosCallService.handleCallRejected(sosId, recipientId, callId);
+
+    res.json({
+      success: true,
+      message: 'SOS call rejected successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error rejecting SOS call:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};

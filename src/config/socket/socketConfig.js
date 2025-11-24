@@ -541,6 +541,11 @@ class SocketConfig {
     return this.connectedUsers.has(userId);
   }
 
+  // 🆕 Kiểm tra user có đang ở foreground không
+  isUserInForeground(userId) {
+    return this.userAppStates.get(userId) === 'foreground';
+  }
+
   getUserSocketId(userId) {
     return this.connectedUsers.get(userId);
   }
