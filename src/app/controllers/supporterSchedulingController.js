@@ -37,9 +37,9 @@ const schedulingController = {
         service,
         address,
         notes,
-        paymentStatus,     // 'unpaid'|'paid'|'refunded' (tuỳ FE)
-        paymentMethod,     // 'cash'|'bank_transfer' (nếu FE gửi)
-        bookingType,       // 'session'|'day'|'month'
+        paymentStatus, // 'unpaid'|'paid'|'refunded' (tuỳ FE)
+        paymentMethod, // 'cash'|'bank_transfer' (nếu FE gửi)
+        bookingType, // 'session'|'day'|'month'
         scheduleDate,
         scheduleTime,
         monthStart,
@@ -48,13 +48,11 @@ const schedulingController = {
       } = schedulingData || {};
       // Bắt các field bắt buộc tối thiểu theo yêu cầu business
       if (!supporter || !elderly || !createdBy || !service || !bookingType) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Thiếu thông tin bắt buộc (supporter, elderly, createdBy, service, bookingType).",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Thiếu thông tin bắt buộc (supporter, elderly, createdBy, service, bookingType).",
+        });
       }
       // Tối thiểu cần địa chỉ để di chuyển (theo form của bạn)
       if (!address) {
@@ -66,12 +64,10 @@ const schedulingController = {
       // Tải service để snapshot giá + cấu hình
       const svc = await SupporterService.findById(service).lean();
       if (!svc || !svc.isActive) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Dịch vụ không tồn tại hoặc đang tắt.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Dịch vụ không tồn tại hoặc đang tắt.",
+        });
       }
 
       // Tính priceAtBooking + chuẩn bị payload theo bookingType
@@ -107,13 +103,10 @@ const schedulingController = {
 
       if (bookingType === "session") {
         if (!scheduleDate || !scheduleTime) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message:
-                "Thiếu scheduleDate hoặc scheduleTime cho gói theo buổi.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Thiếu scheduleDate hoặc scheduleTime cho gói theo buổi.",
+          });
         }
         // snapshot giá
         priceAtBooking =
@@ -128,12 +121,10 @@ const schedulingController = {
         basePayload.priceAtBooking = priceAtBooking;
       } else if (bookingType === "day") {
         if (!scheduleDate) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Thiếu scheduleDate cho gói theo ngày.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Thiếu scheduleDate cho gói theo ngày.",
+          });
         }
         priceAtBooking = serviceSnapshot.byDay.dailyFee || 0;
 
@@ -141,12 +132,10 @@ const schedulingController = {
         basePayload.priceAtBooking = priceAtBooking;
       } else if (bookingType === "month") {
         if (!monthStart) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Thiếu monthStart cho gói theo tháng.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Thiếu monthStart cho gói theo tháng.",
+          });
         }
         // Nếu FE không gửi monthEnd → auto 30 ngày (start + 29)
         const _monthStart = new Date(monthStart);
@@ -185,13 +174,11 @@ const schedulingController = {
         .json({ success: true, message: "Đặt lịch thành công", data: plain });
     } catch (error) {
       console.error("Error creating scheduling:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Đặt lịch thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Đặt lịch thất bại",
+        error: error?.message || error,
+      });
     }
   },
 
@@ -210,7 +197,7 @@ const schedulingController = {
       } = req.body || {};
 
       console.log("userId:", userId);
-      
+
       if (!userId)
         return res
           .status(400)
@@ -233,14 +220,34 @@ const schedulingController = {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      // giải mã address cho từng item (nếu cần hiển thị)
-      const data = items.map((it) => ({
-        ...it,
-        address: it.address ? tryDecryptField(it.address) : "",
-      }));
+      // Giải mã address và các trường mã hóa khác nếu cần
+      const data = items.map((it) => {
+        const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
+        const phoneNumberSupporter = it.supporter?.phoneNumberEnc
+          ? tryDecryptAny(it.supporter.phoneNumberEnc)
+          : "";
+        const emailSupporter = it.supporter?.emailEnc
+          ? tryDecryptAny(it.supporter.emailEnc)
+          : "";
+        const phoneNumberElderly = it.elderly?.phoneNumberEnc
+          ? tryDecryptAny(it.elderly.phoneNumberEnc)
+          : "";
+        const emailElderly = it.elderly?.emailEnc
+          ? tryDecryptAny(it.elderly.emailEnc)
+          : "";
+
+        return {
+          ...it,
+          address: addressDecrypted,
+          phoneNumberSupporter,
+          emailSupporter,
+          phoneNumberElderly,
+          emailElderly,
+        };
+      });
 
       console.log(data);
-      
+
       return res.status(200).json({
         success: true,
         message: "Lấy danh sách đặt lịch thành công",
@@ -249,13 +256,11 @@ const schedulingController = {
       });
     } catch (error) {
       console.error("Error fetching schedulings by user:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Lấy danh sách đặt lịch thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Lấy danh sách đặt lịch thất bại",
+        error: error?.message || error,
+      });
     }
   },
 
@@ -272,6 +277,7 @@ const schedulingController = {
         page = 1,
         limit = 20,
       } = req.query || {};
+
       if (!userId)
         return res
           .status(400)
@@ -295,10 +301,31 @@ const schedulingController = {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      const data = items.map((it) => ({
-        ...it,
-        address: it.address ? tryDecryptField(it.address) : "",
-      }));
+      // Giải mã address và các trường mã hóa khác nếu cần
+      const data = items.map((it) => {
+        const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
+        const phoneNumberSupporter = it.supporter?.phoneNumberEnc
+          ? tryDecryptAny(it.supporter.phoneNumberEnc)
+          : "";
+        const emailSupporter = it.supporter?.emailEnc
+          ? tryDecryptAny(it.supporter.emailEnc)
+          : "";
+        const phoneNumberElderly = it.elderly?.phoneNumberEnc
+          ? tryDecryptAny(it.elderly.phoneNumberEnc)
+          : "";
+        const emailElderly = it.elderly?.emailEnc
+          ? tryDecryptAny(it.elderly.emailEnc)
+          : "";
+
+        return {
+          ...it,
+          address: addressDecrypted,
+          phoneNumberSupporter,
+          emailSupporter,
+          phoneNumberElderly,
+          emailElderly,
+        };
+      });
 
       return res.status(200).json({
         success: true,
@@ -308,13 +335,11 @@ const schedulingController = {
       });
     } catch (error) {
       console.error("Error fetching schedulings by supporter:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Lấy danh sách đặt lịch thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Lấy danh sách đặt lịch thất bại",
+        error: error?.message || error,
+      });
     }
   },
 
@@ -324,10 +349,21 @@ const schedulingController = {
   getSchedulingById: async (req, res) => {
     try {
       const schedulingId = req.params.id;
+
+      // Populate supporter, elderly, and createdBy với các trường mã hóa từ User
       const scheduling = await SupporterScheduling.findById(schedulingId)
-        .populate("supporter", projectUser)
-        .populate("elderly", projectUser)
-        .populate("createdBy", projectUser)
+        .populate(
+          "supporter",
+          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
+        ) // Populate các trường mã hóa từ User
+        .populate(
+          "elderly",
+          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar"
+        ) // Populate elderly nếu có
+        .populate(
+          "createdBy",
+          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
+        ) // Populate createdBy nếu có
         .lean();
 
       if (!scheduling) {
@@ -336,31 +372,124 @@ const schedulingController = {
           .json({ success: false, message: "Không tìm thấy lịch hỗ trợ" });
       }
 
-      // giải mã address
-      const data = {
-        ...scheduling,
-        address: scheduling.address ? tryDecryptField(scheduling.address) : "",
+      const crypto = require("crypto");
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || "", "base64");
+
+      const decryptLegacy = (enc) => {
+        if (!enc) return null;
+        const [ivB64, ctB64, tagB64] = String(enc).split(":");
+        const iv = Buffer.from(ivB64, "base64");
+        const ct = Buffer.from(ctB64, "base64");
+        const tag = Buffer.from(tagB64, "base64");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
       };
 
-      return res
-        .status(200)
-        .json({
-          success: true,
-          message: "Lấy chi tiết lịch hỗ trợ thành công",
-          data,
-        });
+      const decryptGCM = (packed) => {
+        if (!packed) return null;
+        const [ivB64, tagB64, dataB64] = String(packed).split(".");
+        const iv = Buffer.from(ivB64, "base64url");
+        const tag = Buffer.from(tagB64, "base64url");
+        const data = Buffer.from(dataB64, "base64url");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(data), d.final()]).toString("utf8");
+      };
+
+      const tryDecryptAny = (v) => {
+        if (v == null || v === "") return null;
+        const s = String(v);
+        try {
+          if (s.includes(".")) return decryptGCM(s); // Dữ liệu kiểu GCM
+          if (s.includes(":")) return decryptLegacy(s); // Dữ liệu kiểu legacy
+          return s;
+        } catch {
+          return null;
+        }
+      };
+
+      const deepDecrypt = (v, passes = 3) => {
+        let cur = v;
+        for (let i = 0; i < passes; i++) {
+          const out = tryDecryptAny(cur);
+          if (out == null || out === cur) return out;
+          cur = out;
+        }
+        return cur;
+      };
+
+      // Giải mã trường address bằng tryDecryptField
+      const addressDecrypted = scheduling.address
+        ? tryDecryptField(scheduling.address)
+        : "";
+
+      // Giải mã các trường mã hóa khác
+      const phoneNumberSupporter = scheduling?.supporter?.phoneNumberEnc
+        ? tryDecryptAny(scheduling?.supporter?.phoneNumberEnc)
+        : "";
+      const emailSupporter = scheduling?.supporter?.emailEnc
+        ? tryDecryptAny(scheduling?.supporter?.emailEnc)
+        : "";
+      const phoneNumberElderly = scheduling?.elderly?.phoneNumberEnc
+        ? tryDecryptAny(scheduling?.elderly?.phoneNumberEnc)
+        : "";
+      const emailElderly = scheduling?.elderly?.emailEnc
+        ? tryDecryptAny(scheduling?.elderly?.emailEnc)
+        : "";
+      const phoneNumberCreatedBy = scheduling?.createdBy?.phoneNumberEnc
+        ? tryDecryptAny(scheduling?.createdBy?.phoneNumberEnc)
+        : "";
+      const emailCreatedBy = scheduling?.createdBy?.emailEnc
+        ? tryDecryptAny(scheduling?.createdBy?.emailEnc)
+        : "";
+
+      // Tạo response với
+      const responseScheduling = {
+        ...scheduling,
+        address: addressDecrypted, // Giải mã address bằng tryDecryptField
+        phoneNumberSupporter: phoneNumberSupporter,
+        emailSupporter: emailSupporter,
+        phoneNumberElderly: phoneNumberElderly,
+        emailElderly: emailElderly,
+        phoneNumberCreatedBy: phoneNumberCreatedBy,
+        emailCreatedBy: emailCreatedBy,
+      };
+
+      // Dọn rác (xóa các trường mã hóa khỏi kết quả trả về)
+      delete responseScheduling.phoneNumberEnc;
+      delete responseScheduling.emailEnc;
+      delete responseScheduling.addressEnc;
+      delete responseScheduling.identityCardEnc;
+      delete responseScheduling.currentAddressEnc;
+      delete responseScheduling.hometownEnc;
+
+      // Mask thông tin nhạy cảm như số điện thoại và email
+      const mask = (x, n = 4) =>
+        typeof x === "string" && x ? x.slice(0, n) + "***" : x;
+      console.log("[getSchedulingById] masked:", {
+        phoneNumberSupporter: mask(responseScheduling.phoneNumberSupporter),
+        emailSupporter: mask(responseScheduling.emailSupporter),
+        phoneNumberElderly: mask(responseScheduling.phoneNumberElderly),
+        emailElderly: mask(responseScheduling.emailElderly),
+        phoneNumberCreatedBy: mask(responseScheduling.phoneNumberCreatedBy),
+        emailCreatedBy: mask(responseScheduling.emailCreatedBy),
+      });
+
+      // Thiết lập no-store cho cache để bảo mật dữ liệu
+      res.set("Cache-Control", "no-store");
+      return res.status(200).json({ success: true, data: responseScheduling });
     } catch (error) {
       console.error("Error fetching scheduling by id:", error);
       return res
         .status(500)
         .json({
           success: false,
-          message: "Lấy chi tiết lịch hỗ trợ thất bại",
+          message: "Đã xảy ra lỗi",
           error: error?.message || error,
         });
     }
   },
-
   /**
    * PATCH /api/schedulings/:id/status
    * Body: { status }
@@ -387,22 +516,18 @@ const schedulingController = {
       const plain = toPlain(scheduling);
       if (plain.address) plain.address = tryDecryptField(plain.address);
 
-      return res
-        .status(200)
-        .json({
-          success: true,
-          message: "Cập nhật trạng thái lịch hỗ trợ thành công",
-          data: plain,
-        });
+      return res.status(200).json({
+        success: true,
+        message: "Cập nhật trạng thái lịch hỗ trợ thành công",
+        data: plain,
+      });
     } catch (error) {
       console.error("Error updating scheduling status:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Cập nhật trạng thái lịch hỗ trợ thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Cập nhật trạng thái lịch hỗ trợ thất bại",
+        error: error?.message || error,
+      });
     }
   },
 
@@ -415,12 +540,10 @@ const schedulingController = {
     try {
       const { supporterId, elderlyId } = req.body || {};
       if (!supporterId || !elderlyId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message: "Thiếu supporterId hoặc elderlyId.",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu supporterId hoặc elderlyId.",
+        });
       }
 
       const schedulings = await SupporterScheduling.find({
@@ -441,13 +564,11 @@ const schedulingController = {
       });
     } catch (error) {
       console.error("Error checking all completed or canceled:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Kiểm tra lịch thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Kiểm tra lịch thất bại",
+        error: error?.message || error,
+      });
     }
   },
 
@@ -480,16 +601,13 @@ const schedulingController = {
       });
     } catch (error) {
       console.error("Error fetching all schedulings for admin:", error);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Lấy danh sách đặt lịch thất bại",
-          error: error?.message || error,
-        });
+      return res.status(500).json({
+        success: false,
+        message: "Lấy danh sách đặt lịch thất bại",
+        error: error?.message || error,
+      });
     }
   },
-
 };
 
 module.exports = schedulingController;
