@@ -21,4 +21,7 @@ router.get('/:id', supporterSchedulingController.getSchedulingById);
 // Cập nhật trạng thái đặt lịch
 router.put('/:id/status', supporterSchedulingController.updateSchedulingStatus);
 
+// Lấy tất cả danh sách đặt lịch dành cho mục đích admin (có phân trang, lọc, tìm kiếm)
+router.get('/admin/all', supporterSchedulingController.getAllSchedulingsForAdmin);
+
 module.exports = router;

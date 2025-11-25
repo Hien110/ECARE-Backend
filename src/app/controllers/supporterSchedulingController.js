@@ -450,6 +450,46 @@ const schedulingController = {
         });
     }
   },
+
+  // Lấy tất cả danh sách đặt lịch dành cho mục đích admin (có phân trang, lọc, tìm kiếm)
+  getAllSchedulingsForAdmin: async (req, res) => {
+    try {
+      const { page = 1, limit = 20 } = req.query || {};
+
+      const skip = (Number(page) - 1) * Number(limit);
+      const [items, total] = await Promise.all([
+        SupporterScheduling.find()
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(Number(limit))
+          .populate("supporter", projectUser)
+          .populate("elderly", projectUser)
+          .populate("createdBy", projectUser)
+          .lean(),
+        SupporterScheduling.countDocuments(),
+      ]);
+      const data = items.map((it) => ({
+        ...it,
+        address: it.address ? tryDecryptField(it.address) : "",
+      }));
+      return res.status(200).json({
+        success: true,
+        message: "Lấy danh sách đặt lịch thành công",
+        data,
+        pagination: { page: Number(page), limit: Number(limit), total },
+      });
+    } catch (error) {
+      console.error("Error fetching all schedulings for admin:", error);
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message: "Lấy danh sách đặt lịch thất bại",
+          error: error?.message || error,
+        });
+    }
+  },
+
 };
 
 module.exports = schedulingController;
