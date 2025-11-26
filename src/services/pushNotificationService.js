@@ -49,13 +49,6 @@ class PushNotificationService {
       console.log(`📤 Sending video call notification to ${tokens.length} devices`);
       console.log('🔑 FCM Tokens (first 50 chars):', tokens.map(t => t.substring(0, 50) + '...'));
 
-      // KHÔNG gửi notification object - chỉ gửi data
-      // Vì chúng ta sẽ dùng Notifee để hiển thị full-screen notification
-      // notification: {
-      //   title: '📞 Cuộc gọi video đến',
-      //   body: `${caller.fullName} đang gọi video cho bạn...`
-      // },
-
       // Data payload - sẽ được xử lý bởi background handler
       const data = {
         type: 'video_call',
@@ -166,7 +159,16 @@ class PushNotificationService {
       console.log(`📤 Sending SOS notification to ${tokens.length} devices`);
       console.log('🔑 FCM Tokens (first 50 chars):', tokens.map(t => t.substring(0, 50) + '...'));
 
-      // Data payload - KHÔNG gửi notification object để dùng full-screen notification
+      // 🚫 KHÔNG GỬI THÔNG BÁO SOS ALERT NỮA - CHỈ GỬI SOS CALL
+      // Thông báo SOS sẽ được gửi qua socket và SOS call notification
+      console.log('ℹ️  SOS notification (type: sos) has been disabled. Use SOS call instead.');
+      
+      return {
+        success: true,
+        message: 'SOS alert notification is disabled. Only SOS call notifications are sent.'
+      };
+
+      /* OLD CODE - COMMENTED OUT
       const data = {
         type: 'sos',
         sosId: _id.toString(),
@@ -178,29 +180,15 @@ class PushNotificationService {
         address: location.address || 'Không xác định',
         message: message || '',
         timestamp: new Date().toISOString(),
-        clickAction: 'SOS_DETAIL' // Để navigate trong app
+        clickAction: 'SOS_DETAIL'
       };
 
-      console.log('📦 SOS notification data:', {
-        type: data.type,
-        sosId: data.sosId,
-        requesterId: data.requesterId.substring(0, 10) + '...',
-        requesterName: data.requesterName
-      });
-
-      // Gửi đến nhiều thiết bị cùng lúc
       const response = await admin.messaging().sendEachForMulticast({
         tokens: tokens,
-        // KHÔNG gửi notification object để tránh hiển thị notification cơ bản
-        // Chỉ gửi data, sẽ được xử lý bởi background handler để hiển thị full-screen
         data: data,
-        
-        // Cấu hình cho Android - data-only message
         android: {
-          priority: 'high', // Vẫn cần priority cao để wake app
+          priority: 'high',
         },
-        
-        // Cấu hình cho iOS - content-available để wake app
         apns: {
           payload: {
             aps: {
@@ -233,6 +221,7 @@ class PushNotificationService {
         failureCount: response.failureCount,
         totalTokens: tokens.length
       };
+      */
 
     } catch (error) {
       console.error('❌ Error sending SOS notification:', error);

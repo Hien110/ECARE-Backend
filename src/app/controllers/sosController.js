@@ -1,5 +1,6 @@
 const SOSNotification = require('../models/SOSNotification');
 const pushNotificationService = require('../../services/pushNotificationService');
+const sosCallService = require('../../services/sosCallService');
 
 /**
  * Tạo SOS notification mới
@@ -41,6 +42,32 @@ exports.createSOS = async (req, res) => {
       });
     }
 
+    // 🆕 Kiểm tra xem user có SOS đang active không
+    const hasActiveSOS = sosCallService.hasActiveSOSCall(requesterId);
+    if (hasActiveSOS) {
+      return res.status(409).json({
+        success: false,
+        message: 'Bạn đang có cuộc gọi SOS đang xử lý. Vui lòng đợi hoàn tất trước khi gửi SOS mới.',
+        code: 'ACTIVE_SOS_EXISTS'
+      });
+    }
+
+    // Kiểm tra xem có SOS chưa xử lý trong database không
+    const existingActiveSOS = await SOSNotification.findOne({
+      requester: requesterId,
+      status: { $in: ['active', 'acknowledged'] },
+      createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) } // Trong 10 phút gần đây
+    });
+
+    if (existingActiveSOS) {
+      return res.status(409).json({
+        success: false,
+        message: 'Bạn có SOS chưa xử lý. Vui lòng đợi hoàn tất trước khi gửi SOS mới.',
+        code: 'ACTIVE_SOS_EXISTS',
+        existingSOS: existingActiveSOS._id
+      });
+    }
+
     const sosNotification = new SOSNotification({
       requester: requesterId,
       recipients,
@@ -70,6 +97,13 @@ exports.createSOS = async (req, res) => {
     pushNotificationService.sendSOSNotification(sosNotification)
       .catch(error => {
         console.error('❌ Push notification error:', error.message);
+      });
+
+    // 3. 🆕 BẮT ĐẦU AUTO-CALL SEQUENCE
+    // Tự động gọi lần lượt đến các recipients với timeout 30s
+    sosCallService.startAutoCallSequence(sosNotification)
+      .catch(error => {
+        console.error('❌ Auto-call sequence error:', error.message);
       });
 
     res.status(201).json({
@@ -294,6 +328,39 @@ exports.deleteSOSNotification = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error deleting SOS:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+/**
+ * Từ chối SOS call (từ notification background)
+ */
+exports.rejectSOSCall = async (req, res) => {
+  try {
+    const { sosId, callId } = req.body;
+    const recipientId = req.user._id || req.user.userId || req.user.id;
+
+    if (!sosId || !callId) {
+      return res.status(400).json({
+        success: false,
+        message: 'sosId and callId are required'
+      });
+    }
+
+    console.log(`📞 HTTP API: Rejecting SOS call ${callId} by ${recipientId}`);
+
+    // Gọi service để xử lý reject
+    await sosCallService.handleCallRejected(sosId, recipientId, callId);
+
+    res.json({
+      success: true,
+      message: 'SOS call rejected successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error rejecting SOS call:', error);
     res.status(500).json({
       success: false,
       message: error.message

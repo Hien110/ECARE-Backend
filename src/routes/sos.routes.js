@@ -45,6 +45,16 @@ router.patch('/:sosId/status', authMiddleware, sosController.updateSOSStatus);
  */
 router.delete('/:sosId', authMiddleware, sosController.deleteSOSNotification);
 
+// ============= SOS CALL ROUTES =============
+
+/**
+ * @route   POST /api/sos/call/reject
+ * @desc    Từ chối SOS call (có thể gọi từ notification background)
+ * @body    { sosId, callId }
+ * @access  Private
+ */
+router.post('/call/reject', authMiddleware, sosController.rejectSOSCall);
+
 // ============= FCM TOKEN ROUTES =============
 
 /**
