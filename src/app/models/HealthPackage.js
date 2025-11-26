@@ -5,11 +5,12 @@ const HealthPackageSchema = new mongoose.Schema({
   // Tên gói khám, ví dụ "Gói Khám Tổng Quát 1 Tháng"
   title: { type: String, required: true, trim: true },
 
-  // Thời hạn gói khám: chọn từ các mốc cố định hoặc nhập tuỳ ý
+
+  // Các mốc thời hạn cố định
   durationOptions: {
     type: [{
       type: Number,
-      enum: [30, 90, 180, 270], // 1 tháng, 3 tháng, 6 tháng, 9 tháng (tính theo ngày)
+      enum: [30, 90, 180, 270, 365], // 1 tháng, 3 tháng, 6 tháng, 9 tháng, 1 năm
     }],
     default: [30],
     required: true,
@@ -23,9 +24,25 @@ const HealthPackageSchema = new mongoose.Schema({
   },
   // Nếu muốn nhập số ngày tuỳ ý
   customDuration: { type: Number, min: 1 },
-
-  // Giá mặc định của gói (đơn vị VND). Trường này có thể được ghi đè trong bản đăng ký nếu cần.
-  price: { type: Number, required: true, min: 0 },
+  // Giá riêng cho customDuration nếu có
+  customDurationPrice: { type: Number, min: 0 },
+  // Mảng phí cho các mốc cố định
+  fees: {
+    type: [
+      {
+        days: { type: Number, required: true, enum: [30, 90, 180, 270, 365] },
+        fee: { type: Number, required: true, min: 0 }
+      }
+    ],
+    required: true,
+    validate: {
+      validator: function(arr) {
+        // Đảm bảo không trùng lặp số ngày
+        return Array.isArray(arr) && new Set(arr.map(f => f.days)).size === arr.length;
+      },
+      message: "fees có phần tử trùng lặp số ngày."
+    }
+  },
 
   // Mô tả chi tiết về gói
   service: [{
