@@ -1,5 +1,7 @@
+const SupporterScheduling = require('../models/SupporterScheduling');
 const HealthPackage = require('../models/HealthPackage');
 const mongoose = require('mongoose');
+const RegistrationHealthPackage = require('../models/RegistrationHealthPackage');
 
 // Helper kiểm tra ObjectId hợp lệ
 const isValidObjectId = (v) => typeof v === "string" && /^[a-fA-F0-9]{24}$/.test(v);
@@ -7,19 +9,31 @@ const healthPackageController = {
  // Tạo mới gói khám
    createHealthPackage: async (req, res) => {
     try {
-      const { title, durationOptions, customDuration, price, service, description, isActive } = req.body;
-      if (!title || !description || !price || !Array.isArray(service) || service.length === 0 || !Array.isArray(durationOptions) || durationOptions.length === 0) {
+      const { title, durationOptions, fees, customDuration, customDurationPrice, service, description, isActive } = req.body;
+      if (!title || !description || !Array.isArray(service) || service.length === 0 || !Array.isArray(durationOptions) || durationOptions.length === 0 || !Array.isArray(fees) || fees.length === 0) {
         return res.status(400).json({ success: false, message: "Thiếu thông tin bắt buộc" });
       }
-      // Kiểm tra customDuration nếu có
-      if (customDuration && (typeof customDuration !== 'number' || customDuration < 1)) {
-        return res.status(400).json({ success: false, message: "customDuration phải là số ngày hợp lệ" });
+      // Kiểm tra fees
+      const validDurations = [30, 90, 180, 270, 365];
+      for (const f of fees) {
+        if (!validDurations.includes(f.days) || typeof f.fee !== 'number' || f.fee < 0) {
+          return res.status(400).json({ success: false, message: "fees phải hợp lệ và đúng mốc thời hạn" });
+        }
+      }
+      // Kiểm tra customDuration và customDurationPrice nếu có
+      if ((customDuration && (typeof customDuration !== 'number' || customDuration < 1)) ||
+          (customDuration && (typeof customDurationPrice !== 'number' || customDurationPrice < 0))) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải hợp lệ" });
+      }
+      // Nếu có customDuration thì customDurationPrice phải có, và ngược lại
+      if ((customDuration && customDurationPrice === undefined) || (customDurationPrice !== undefined && !customDuration)) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải đi kèm nhau" });
       }
       const healthPackage = await HealthPackage.create({
         title,
         durationOptions,
         customDuration,
-        price,
+        customDurationPrice,
         service,
         description,
         isActive
@@ -29,13 +43,33 @@ const healthPackageController = {
       return res.status(500).json({ success: false, message: "Lỗi khi tạo gói khám" });
     }
   },
+  // Lấy danh sách các gói khám mà beneficiary là userId
+  listRegisteredPackagesByBeneficiary: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "ID không hợp lệ" });
+      }
+      // Lấy các đăng ký mà beneficiary là userId, populate thông tin gói khám và người đăng ký
+      const registrations = await RegistrationHealthPackage.find({ beneficiary: userId })
+        .populate('packageRef')
+        .populate('registrant')
+        .populate('doctor')
+        .populate('durationDays')
+        .sort({ registeredAt: -1 });
+      // Trả về danh sách các gói khám đã đăng ký
+      return res.status(200).json({ success: true, data: registrations });
+    } catch (err) {
+      console.error("[listRegisteredPackagesByBeneficiary] Error:", err);
+      return res.status(500).json({ success: false, message: "Lỗi khi lấy danh sách gói khám đã đăng ký" });
+    }
+  },
 
   // Lấy danh sách tất cả gói khám
    listHealthPackage: async (req, res) => {
     try {
       // Tìm các gói khám chưa có đăng ký nào
       // Sử dụng đúng trường packageRef để lấy các gói đã đăng ký
-      const RegistrationHealthPackage = require('../models/RegistrationHealthPackage');
       const registeredIds = await RegistrationHealthPackage.distinct('packageRef');
       const packages = await HealthPackage.find({ _id: { $nin: registeredIds } }).sort({ createdAt: -1 });
       return res.status(200).json({ success: true, data: packages });
@@ -69,9 +103,23 @@ const healthPackageController = {
         return res.status(400).json({ success: false, message: "ID không hợp lệ" });
       }
       const updateData = req.body;
+      // Kiểm tra fees
+      if (updateData.fees) {
+        const validDurations = [30, 90, 180, 270, 365];
+        for (const f of updateData.fees) {
+          if (!validDurations.includes(f.days) || typeof f.fee !== 'number' || f.fee < 0) {
+            return res.status(400).json({ success: false, message: "fees phải hợp lệ và đúng mốc thời hạn" });
+          }
+        }
+      }
       // Nếu có customDuration thì kiểm tra hợp lệ
-      if (updateData.customDuration && (typeof updateData.customDuration !== 'number' || updateData.customDuration < 1)) {
-        return res.status(400).json({ success: false, message: "customDuration phải là số ngày hợp lệ" });
+      if ((updateData.customDuration && (typeof updateData.customDuration !== 'number' || updateData.customDuration < 1)) ||
+          (updateData.customDuration && (typeof updateData.customDurationPrice !== 'number' || updateData.customDurationPrice < 0))) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải hợp lệ" });
+      }
+      // Nếu có customDuration thì customDurationPrice phải có, và ngược lại
+      if ((updateData.customDuration && updateData.customDurationPrice === undefined) || (updateData.customDurationPrice !== undefined && !updateData.customDuration)) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải đi kèm nhau" });
       }
       // Nếu có durationOptions thì kiểm tra hợp lệ
       if (updateData.durationOptions && (!Array.isArray(updateData.durationOptions) || updateData.durationOptions.length === 0)) {
@@ -101,6 +149,47 @@ const healthPackageController = {
       return res.status(200).json({ success: true, message: "Đã xóa gói khám" });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Lỗi khi xóa gói khám" });
+    }
+  },
+    // Lấy danh sách các gói khám đã đăng ký bởi người đăng ký (registrant)
+    listRegisteredPackagesByRegistrant: async (req, res) => {
+      try {
+        const { userId } = req.params;
+        if (!isValidObjectId(userId)) {
+          return res.status(400).json({ success: false, message: "ID không hợp lệ" });
+        }
+        // Ép kiểu userId sang ObjectId để đảm bảo truy vấn chính xác
+        const objectId = new mongoose.Types.ObjectId(userId);
+        // Debug: log tất cả các bản ghi có trường registrant
+        const allWithRegistrant = await RegistrationHealthPackage.find({ registrant: { $exists: true } }).lean();
+
+        const registrations = await RegistrationHealthPackage.find({ registrant: objectId })
+          .populate('packageRef')
+          .populate('registrant')
+          .sort({ registeredAt: -1 });
+
+        return res.status(200).json({ success: true, data: registrations });
+      } catch (err) {
+        console.error("[listRegisteredPackagesByRegistrant] Error:", err);
+        return res.status(500).json({ success: false, message: "Lỗi khi lấy danh sách gói khám đã đăng ký" });
+      }
+    },
+     // Lấy danh sách lịch hẹn với supporter theo người già (elderly)
+  listSupporterSchedulesByElderly: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "ID không hợp lệ" });
+      }
+      // Lấy tất cả lịch hẹn mà elderly là userId, populate supporter, service
+      const schedules = await SupporterScheduling.find({ elderly: userId })
+        .populate('supporter')
+        .populate('service')
+        .sort({ scheduleDate: -1, createdAt: -1 });
+      return res.status(200).json({ success: true, data: schedules });
+    } catch (err) {
+      console.error("[listSupporterSchedulesByElderly] Error:", err);
+      return res.status(500).json({ success: false, message: "Lỗi khi lấy danh sách lịch hẹn" });
     }
   },
 }

@@ -54,7 +54,7 @@ router.get("/nearby-doctors", AdminController.getNearbyDoctors);
 
 // Admin status check
 router.get("/status", AdminController.checkAdminStatus);
-
+router.get("/relationship/accepted-family/:familyId", AdminController.getAcceptRelationshipByFamilyIdAdmin);
 // Refresh admin token (không cần authorize vì đã có authenticateToken)
 router.post("/refresh-token", AdminController.refreshAdminToken);
 
