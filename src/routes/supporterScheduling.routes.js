@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const supporterSchedulingController = require('../app/controllers/supporterSchedulingController');
 const authenticateToken = require('../app/middlewares/authMiddleware');
+const { authorize, checkUserStatus } = require('../app/middlewares/authorize');
 
 // router.use(authenticateToken);
 // Tạo lịch hỗ trợ mới
+router.use(authenticateToken);
 router.post('/', supporterSchedulingController.createScheduling);
 
 // Lấy danh sách đặt lịch theo id
@@ -20,5 +22,10 @@ router.get('/:id', supporterSchedulingController.getSchedulingById);
 
 // Cập nhật trạng thái đặt lịch
 router.put('/:id/status', supporterSchedulingController.updateSchedulingStatus);
+
+router.use(authorize('admin'));
+
+// Lấy tất cả danh sách đặt lịch dành cho mục đích admin (có phân trang, lọc, tìm kiếm)
+router.get('/admin/all', supporterSchedulingController.getAllSchedulingsForAdmin);
 
 module.exports = router;

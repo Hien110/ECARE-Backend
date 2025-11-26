@@ -58,6 +58,10 @@ class SocketConfig {
 
     this.setupEventHandlers();
 
+    // 🆕 Initialize SOS Call Service với socket instance
+    const sosCallService = require('../../services/sosCallService');
+    sosCallService.initialize(this);
+
     console.log('🚀 Socket.IO server initialized');
     return this.io;
   }
@@ -77,6 +81,7 @@ class SocketConfig {
       this.handleConversationEvents(socket);
       this.handleTypingEvents(socket);
       this.handleVideoCallEvents(socket);
+      this.handleSOSCallEvents(socket); // 🆕 SOS Call Events
       this.handleDisconnect(socket);
     });
   }
@@ -257,7 +262,7 @@ class SocketConfig {
           requestedBy: socket.userId // Log người gửi request
         });
 
-        // ⚠️ KIỂM TRA CALLEE ĐANG TRONG CUỘC GỌI KHÁC KHÔNG
+        // ⚠️ KIỂM TRA CALLEE ĐANG TRONG CUỘC GỌI KHÁC KHÔNG (bao gồm cả SOS call)
         if (this.activeCallUsers.has(calleeId)) {
           const existingCallId = this.activeCallUsers.get(calleeId);
           console.log(`⚠️ Callee ${calleeId} is already in another call: ${existingCallId}`);
@@ -267,6 +272,21 @@ class SocketConfig {
             callId,
             calleeId,
             message: 'Người dùng đang có cuộc gọi khác'
+          });
+          
+          return; // Không xử lý tiếp
+        }
+
+        // ⚠️ KIỂM TRA CALLER ĐANG TRONG CUỘC GỌI KHÁC KHÔNG (bao gồm cả SOS call)
+        if (this.activeCallUsers.has(callerId)) {
+          const existingCallId = this.activeCallUsers.get(callerId);
+          console.log(`⚠️ Caller ${callerId} is already in another call: ${existingCallId}`);
+          
+          // Thông báo cho caller rằng họ đang trong cuộc gọi khác
+          socket.emit('video_call_busy', {
+            callId,
+            calleeId,
+            message: 'Bạn đang trong cuộc gọi khác'
           });
           
           return; // Không xử lý tiếp
@@ -410,9 +430,9 @@ class SocketConfig {
     });
 
     // Kết thúc cuộc gọi
-    socket.on('video_call_ended', (data) => {
-      const { callId, conversationId, otherUserId } = data;
-      console.log('👋 Video call ended received:', { callId, otherUserId, endedBy: socket.userId });
+    socket.on('video_call_ended', async (data) => {
+      const { callId, conversationId, otherUserId, sosId } = data;
+      console.log('👋 Video call ended received:', { callId, otherUserId, sosId, endedBy: socket.userId });
 
       // Xóa cả 2 users khỏi active calls
       this.activeCallUsers.delete(socket.userId);
@@ -420,6 +440,20 @@ class SocketConfig {
         this.activeCallUsers.delete(otherUserId);
       }
       console.log(`📞 Active call users removed: ${socket.userId}${otherUserId ? `, ${otherUserId}` : ''}`);
+
+      // 🆕 Nếu là SOS call, update status trong database
+      if (sosId) {
+        try {
+          const SOSNotification = require('../../app/models/SOSNotification');
+          await SOSNotification.findByIdAndUpdate(sosId, {
+            status: 'resolved',
+            resolvedAt: new Date()
+          });
+          console.log(`✅ SOS ${sosId} marked as resolved`);
+        } catch (error) {
+          console.error('❌ Error updating SOS status:', error);
+        }
+      }
 
       // Thông báo cho người còn lại rằng cuộc gọi đã kết thúc
       if (otherUserId) {
@@ -442,6 +476,58 @@ class SocketConfig {
     });
   }
 
+  handleSOSCallEvents(socket) {
+    const sosCallService = require('../../services/sosCallService');
+
+    // Recipient chấp nhận cuộc gọi SOS
+    socket.on('sos_call_accepted', async (data) => {
+      try {
+        const { sosId, callId } = data;
+        console.log(`✅ SOS call accepted by ${socket.userId}:`, { sosId, callId });
+
+        // Xử lý accept trong service
+        const accepted = await sosCallService.handleCallAccepted(sosId, socket.userId, callId);
+
+        if (accepted) {
+          // Emit confirmation back to recipient
+          socket.emit('sos_call_accept_confirmed', {
+            sosId,
+            callId,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error in sos_call_accepted:', error);
+        socket.emit('sos_call_error', {
+          message: error.message
+        });
+      }
+    });
+
+    // Recipient từ chối cuộc gọi SOS
+    socket.on('sos_call_rejected', async (data) => {
+      try {
+        const { sosId, callId } = data;
+        console.log(`❌ SOS call rejected by ${socket.userId}:`, { sosId, callId });
+
+        // Xử lý reject trong service
+        await sosCallService.handleCallRejected(sosId, socket.userId, callId);
+
+        // Emit confirmation back to recipient
+        socket.emit('sos_call_reject_confirmed', {
+          sosId,
+          callId,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        console.error('❌ Error in sos_call_rejected:', error);
+        socket.emit('sos_call_error', {
+          message: error.message
+        });
+      }
+    });
+  }
+
   handleDisconnect(socket) {
     socket.on('disconnect', () => {
       this.connectedUsers.delete(socket.userId);
@@ -453,6 +539,11 @@ class SocketConfig {
   // Utility methods
   isUserOnline(userId) {
     return this.connectedUsers.has(userId);
+  }
+
+  // 🆕 Kiểm tra user có đang ở foreground không
+  isUserInForeground(userId) {
+    return this.userAppStates.get(userId) === 'foreground';
   }
 
   getUserSocketId(userId) {
