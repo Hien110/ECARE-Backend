@@ -1,9 +1,8 @@
 // utils/notificationEmergency.js
 const Notification = require("../app/models/Notification");
-const User = require("../app/models/User"); // chỉnh path đúng theo dự án của bạn
+const User = require("../app/models/User");
 const firebaseAdmin = require("../config/firebase");
 
-/** Map mức rủi ro -> priority trong schema Notification */
 function severityToPriority(sev = "low") {
   switch (sev) {
     case "critical": return "urgent";
@@ -13,13 +12,11 @@ function severityToPriority(sev = "low") {
   }
 }
 
-/** Map mức rủi ro -> type trong schema Notification */
 function pickNotificationType(sev = "low") {
   if (sev === "critical" || sev === "high") return "emergency_alert";
   if (sev === "medium") return "health_alert";
   return "mood_check";
 }
-
 
 async function createDistressNotifications(opts = {}) {
   const {
@@ -36,28 +33,30 @@ async function createDistressNotifications(opts = {}) {
 
   if (!recipientIds.length) return Promise.resolve([]);
 
-  // === LẤY TÊN ELDER TỪ User.fullName ===
   let elderName = "Người cao tuổi";
   try {
     const elderUser = await User.findById(elderId).select("fullName role");
     if (elderUser?.fullName) elderName = elderUser.fullName;
     console.log("[AI][AlertFlow] Elder name:", elderName);
   } catch (e) {
-    console.warn("[AI][AlertFlow] Could not fetch elder name:", e?.message || e);
+    console.warn(
+      "[AI][AlertFlow] Could not fetch elder name:",
+      e?.message || e
+    );
   }
 
-  // === GHÉP TIÊU ĐỀ/NỘI DUNG THEO TÊN ===
-  const finalTitle = (title && title.trim())
-    ? title
-    : `⚠️ Cảnh báo: ${elderName} có biểu hiện tiêu cực`;
+  const finalTitle =
+    title && title.trim()
+      ? title
+      : `⚠️ Cảnh báo: ${elderName} có biểu hiện tiêu cực`;
 
-  const finalBody = (message && message.trim())
-    ? message
-    : `Hệ thống phát hiện ${elderName} có tín hiệu cảm xúc tiêu cực trong cuộc trò chuyện. ` +
-      `Vui lòng liên hệ sớm để động viên và hỗ trợ.`;
+  const finalBody =
+    message && message.trim()
+      ? message
+      : `Hệ thống phát hiện ${elderName} có tín hiệu cảm xúc tiêu cực trong cuộc trò chuyện. Vui lòng liên hệ sớm để động viên và hỗ trợ.`;
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + (expiresInHours * 3600 * 1000));
+  const expiresAt = new Date(now.getTime() + expiresInHours * 3600 * 1000);
 
   const payloads = recipientIds.map((rid) => ({
     recipient: rid,
@@ -67,7 +66,7 @@ async function createDistressNotifications(opts = {}) {
     message: finalBody,
     data: {
       ...context,
-      elderName,                // đính kèm để client có thể hiển thị lại
+      elderName,
       actionText: "Xem chi tiết",
       actionUrl: "",
     },
@@ -84,56 +83,100 @@ async function createDistressNotifications(opts = {}) {
 }
 
 function trySendPush({ recipients = [], title, body, data = {} } = {}) {
-  const DEBUG = process.env.NODE_ENV !== "production";
+  const DEBUG = true; // 🔥 Bật log tạm thời cho bạn debug
 
-  if (!firebaseAdmin || !recipients.length) {
-    if (DEBUG) console.log("[PUSH] Skip: no-firebase-or-recipients");
-    return Promise.resolve({ ok: false, reason: "no-firebase-or-recipients" });
+  console.log("\n================= [PUSH DEBUG] =================");
+  console.log("[1] Input recipients:", recipients?.length);
+  console.log("[2] Input title:", title);
+  console.log("[3] Input body:", body);
+  console.log("[4] Input data:", data);
+
+  if (!firebaseAdmin) {
+    console.log("[PUSH] ❌ No firebaseAdmin instance");
+    return Promise.resolve({ ok: false, reason: "no-firebase" });
   }
 
-  // LẤY TOKEN như code gốc (đã OK)
+  if (!recipients.length) {
+    console.log("[PUSH] ❌ No recipients -> Nothing to send");
+    return Promise.resolve({ ok: false, reason: "no-recipients" });
+  }
+
+  // Lấy token FCM đúng chuẩn
   const tokens = recipients.flatMap((u) => {
     const legacy = Array.isArray(u?.pushTokens) ? u.pushTokens : [];
-    const fcmArr = Array.isArray(u?.fcmTokens) ? u.fcmTokens.map(t => t?.token).filter(Boolean) : [];
-    return [...legacy, ...fcmArr];
-  }).filter(Boolean);
+    const fcmArr = Array.isArray(u?.fcmTokens)
+      ? u.fcmTokens.map((t) => t?.token).filter(Boolean)
+      : [];
 
+    return [...legacy, ...fcmArr];
+  });
+
+  console.log("[5] Extracted tokens:", tokens);
   if (!tokens.length) {
-    if (DEBUG) console.log("[PUSH] Skip: no tokens on recipients");
+    console.log("[PUSH] ❌ Recipients have NO TOKENS");
     return Promise.resolve({ ok: false, reason: "no-tokens" });
   }
 
-  if (DEBUG) console.log("[PUSH] Tokens:", tokens.map(t => t.slice(-6)));
+  // 🔥 Nếu là Deadman phys_unwell → gửi bằng channel SOS
+  const isDeadmanPhys =
+    data?.type === "deadman_choice" && data?.choice === "phys_unwell";
+
+  const androidNoti = isDeadmanPhys
+  ? {
+      channelId: "deadman_phys_unwell_sos",
+      sound: "sos_alarm",
+      visibility: "public",
+      sticky: false,
+      defaultVibrateTimings: false,
+      vibrateTimingsMillis: [0, 500, 500, 500, 500, 500, 500],  // <– FIXED
+    }
+  : {
+      sound: "default",
+      visibility: "public",
+      sticky: false,
+    };
+
+  console.log("[6] Android payload:", androidNoti);
 
   const message = {
     tokens,
-    notification: { title, body },   // cần để OS hiển thị banner khi app tắt
-    android: {
-      priority: "high",
-      notification: { sound: "default", visibility: "public", sticky: false },
-    },
-    apns: {
-      headers: { "apns-priority": "10" },
-      payload: { aps: { sound: "default", badge: 1, alert: { title, body } } },
-    },
-    data: Object.fromEntries(Object.entries(data).map(([k, v]) => [String(k), String(v)])),
+    notification: { title, body },
+    android: { priority: "high", notification: androidNoti },
+    data: Object.fromEntries(
+      Object.entries(data || {}).map(([k, v]) => [
+        String(k),
+        String(v ?? ""),
+      ])
+    ),
   };
 
-  return firebaseAdmin.messaging().sendEachForMulticast(message)
+  console.log("[7] Final FCM payload:", message);
+
+  // Gửi đến FCM
+  return firebaseAdmin
+    .messaging()
+    .sendEachForMulticast(message)
     .then((resp) => {
-      if (DEBUG) {
-        const details = resp.responses.map((r, i) => ({
-          tokenLast6: tokens[i]?.slice(-6),
-          ok: r.success,
-          err: r.error?.code || null
-        }));
-        console.log("[PUSH] Per-token:", details);
-      }
-      return { ok: true, successCount: resp.successCount, failureCount: resp.failureCount };
+      console.log("[8] FCM Response:", {
+        successCount: resp.successCount,
+        failureCount: resp.failureCount,
+      });
+
+      resp.responses.forEach((r, idx) => {
+        console.log("    • Token:", tokens[idx]?.slice(-8), 
+                    "| success:", r.success, 
+                    "| error:", r.error?.message);
+      });
+
+      return {
+        ok: true,
+        successCount: resp.successCount,
+        failureCount: resp.failureCount,
+      };
     })
-    .catch((e) => {
-      if (DEBUG) console.log("[PUSH] ERROR:", e?.message || e);
-      return { ok: false, reason: e?.message || "push-failed" };
+    .catch((err) => {
+      console.error("[9] ❌ FCM ERROR:", err);
+      return { ok: false, reason: err?.message || "push-error" };
     });
 }
 
@@ -151,19 +194,21 @@ function markDeliveryResults(notifications = [], channel, result = {}) {
       $set: {
         "deliveryMethods.$[dm].status": ok ? "delivered" : "failed",
         "deliveryMethods.$[dm].deliveredAt": ok ? now : undefined,
-        "deliveryMethods.$[dm].failureReason": ok ? undefined : "send-error",
+        "deliveryMethods.$[dm].failureReason": ok
+          ? undefined
+          : "send-error",
       },
     },
     { arrayFilters: [{ "dm.method": channel }] }
   )
-  .then(() => {
-    if (!ok) return null;
-    return Notification.updateMany(
-      { _id: { $in: ids }, status: { $in: ["sent", "delivered"] } },
-      { $set: { status: "delivered" } }
-    );
-  })
-  .then(() => undefined);
+    .then(() => {
+      if (!ok) return null;
+      return Notification.updateMany(
+        { _id: { $in: ids }, status: { $in: ["sent", "delivered"] } },
+        { $set: { status: "delivered" } }
+      );
+    })
+    .then(() => undefined);
 }
 
 module.exports = {

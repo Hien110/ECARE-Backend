@@ -1,0 +1,19 @@
+const express = require("express");
+const router = express.Router();
+
+const DoctorBookingController = require("../app/controllers/doctorBookingController");
+const authenticateToken = require("../app/middlewares/authMiddleware");
+
+// Tất cả API dưới đây đều yêu cầu đăng nhập
+router.use(authenticateToken);
+
+router.get("/elderlies", DoctorBookingController.getConnectedElderlies);
+router.get("/packages", DoctorBookingController.listHealthPackages);
+router.get("/packages/:id", DoctorBookingController.getHealthPackageDetail);
+router.get("/available-doctors", DoctorBookingController.getAvailableDoctors);
+router.get("/doctors/:doctorId", DoctorBookingController.getDoctorDetail);
+router.post("/book", DoctorBookingController.createBooking);
+router.get("/my-bookings", DoctorBookingController.getMyBookings);
+router.get("/registrations/:id", DoctorBookingController.getRegistrationDetail);
+
+module.exports = router;
