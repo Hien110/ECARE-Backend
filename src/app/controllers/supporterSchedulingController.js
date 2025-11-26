@@ -191,12 +191,9 @@ const schedulingController = {
     try {
       const {
         userId,
-        includeCanceled = "false",
         page = 1,
         limit = 20,
       } = req.body || {};
-
-      console.log("userId:", userId);
 
       if (!userId)
         return res
@@ -205,9 +202,9 @@ const schedulingController = {
 
       const skip = (Number(page) - 1) * Number(limit);
       const query = { elderly: userId };
-      if (includeCanceled !== "true") {
-        query.status = { $ne: "canceled" };
-      }
+      // if (includeCanceled !== "true") {
+      //   query.status = { $ne: "canceled" };
+      // }
 
       const [items, total] = await Promise.all([
         SupporterScheduling.find(query)
@@ -246,8 +243,6 @@ const schedulingController = {
         };
       });
 
-      console.log(data);
-
       return res.status(200).json({
         success: true,
         message: "Lấy danh sách đặt lịch thành công",
@@ -273,10 +268,9 @@ const schedulingController = {
     try {
       const {
         userId,
-        includeCanceled = "false",
         page = 1,
         limit = 20,
-      } = req.query || {};
+      } = req.body || {};
 
       if (!userId)
         return res
@@ -285,9 +279,6 @@ const schedulingController = {
 
       const skip = (Number(page) - 1) * Number(limit);
       const query = { supporter: userId };
-      if (includeCanceled !== "true") {
-        query.status = { $ne: "canceled" };
-      }
 
       const [items, total] = await Promise.all([
         SupporterScheduling.find(query)
@@ -467,14 +458,6 @@ const schedulingController = {
       // Mask thông tin nhạy cảm như số điện thoại và email
       const mask = (x, n = 4) =>
         typeof x === "string" && x ? x.slice(0, n) + "***" : x;
-      console.log("[getSchedulingById] masked:", {
-        phoneNumberSupporter: mask(responseScheduling.phoneNumberSupporter),
-        emailSupporter: mask(responseScheduling.emailSupporter),
-        phoneNumberElderly: mask(responseScheduling.phoneNumberElderly),
-        emailElderly: mask(responseScheduling.emailElderly),
-        phoneNumberCreatedBy: mask(responseScheduling.phoneNumberCreatedBy),
-        emailCreatedBy: mask(responseScheduling.emailCreatedBy),
-      });
 
       // Thiết lập no-store cho cache để bảo mật dữ liệu
       res.set("Cache-Control", "no-store");
@@ -554,7 +537,7 @@ const schedulingController = {
         .lean();
 
       const allCompletedOrCanceled = schedulings.every(
-        (s) => s.status === "completed" || s.status === "canceled"
+        (s) => s.status === "completed" || s.status === "canceled" || s.status === "pending"
       );
 
       return res.status(200).json({
