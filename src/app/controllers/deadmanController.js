@@ -415,11 +415,22 @@ const DeadmanController = {
     }
   },
 
-  _alertRelatives: async (elderUserId) => {
+  _alertRelatives: async (elderUserId, options = {}) => {
+    const DEBUG = process.env.NODE_ENV !== "production";
+    const reqId = Math.random().toString(36).slice(2, 8);
+    const log = (...args) =>
+      DEBUG && console.log(`[DEADMAN][_alertRelatives][#${reqId}]`, ...args);
+
     try {
+      const alertCountToday = options?.alertCountToday ?? null;
+      const isAutoSOS = !!options?.isAutoSOS;
+
+      log("Start _alertRelatives", { elderUserId, alertCountToday, isAutoSOS });
+
+      // 1) Lấy danh sách người thân có quyền nhận cảnh báo
       const rels = await Relationship.find({
         elderly: elderUserId,
-        status: "accepted",                    
+        status: "accepted",
         "permissions.receiveAlerts": true,
       })
         .populate({
@@ -431,6 +442,70 @@ const DeadmanController = {
       const families = rels.map((r) => r?.family).filter(Boolean);
       const recipientIds = families.map((f) => f._id);
 
+      // 2) Lấy thông tin người cao tuổi
+      const elder = await User.findById(elderUserId).select(
+        "fullName role fcmTokens pushTokens"
+      );
+      const elderName = elder?.fullName || "Người cao tuổi";
+
+      // ==========================
+      // ✅ NHÁNH AUTO SOS (lần thứ 3)
+      // ==========================
+      if (isAutoSOS) {
+        log("Auto-SOS branch", {
+          alertCountToday,
+          recipientIdsCount: recipientIds.length,
+        });
+
+        // 2.1. Lưu notification in-app cho người thân
+        if (recipientIds.length > 0) {
+          await createDistressNotifications({
+            elderId: elderUserId,
+            recipientIds,
+            severity: "critical",
+            title: "🚨 Hệ thống tự động kích hoạt SOS",
+            message: `${elderName} chưa xác nhận an toàn sau 3 lần nhắc. Hệ thống đã kích hoạt gọi khẩn cấp SOS.`,
+            context: {
+              feature: "deadman",
+              reason: "deadman_auto_sos",
+              alertCountToday,
+            },
+            // Không push riêng, chỉ lưu in-app
+            channels: ["in_app"],
+            groupKey: "deadman_auto_sos",
+          });
+        }
+
+        // 2.2. Gửi push CHỈ CHO NGƯỜI CAO TUỔI để app tự gọi handleEmergency()
+        if (elder) {
+          const pushResult = await trySendPush({
+            recipients: [elder],
+            title: "🚨 Hệ thống kiểm tra an toàn",
+            body: `${elderName}, hệ thống đang kích hoạt chế độ khẩn cấp. Vui lòng giữ máy.`,
+            data: {
+              type: "deadman_auto_sos",
+              elderId: String(elderUserId),
+              elderName,
+              alertCountToday,
+              isAutoSOS: true,
+              action: "open_app",
+              groupKey: "deadman_auto_sos",
+            },
+          });
+          log("📤 Auto-SOS push result (elder only):", { pushResult });
+        } else {
+          log("⚠️ Không tìm thấy device của người cao tuổi để gửi autoSOS");
+        }
+
+        console.log(
+          `[DEADMAN][_alertRelatives] DONE (autoSOS). relatives=${families.length}, alertCountToday=${alertCountToday}, isAutoSOS=${isAutoSOS}`
+        );
+        return; // Kết thúc nhánh autoSOS
+      }
+
+      // ==============================
+      // 🟡 NHÁNH THƯỜNG (KHÔNG autoSOS)
+      // ==============================
       await createDistressNotifications({
         elderId: elderUserId,
         recipientIds,
@@ -442,15 +517,23 @@ const DeadmanController = {
         groupKey: "elder_deadman",
       });
 
-      await trySendPush({
-        recipients: families,                 
-        title: "⚠️ Cảnh báo người thân",
-        body: "Người thân hôm nay chưa xác nhận an toàn. Vui lòng liên hệ.",
-        data: { type: "deadman_alert", action: "open_app" },
-      });
+      if (families.length > 0) {
+        const pushResult = await trySendPush({
+          recipients: families,
+          title: "⚠️ Cảnh báo người thân",
+          body: "Người thân hôm nay chưa xác nhận an toàn. Vui lòng liên hệ.",
+          data: { type: "deadman_alert", action: "open_app" },
+        });
+        log("📤 Normal alert push result:", {
+          countRecipients: families.length,
+          pushResult,
+        });
+      } else {
+        log("⚠️ No families to receive normal alert");
+      }
 
       console.log(
-        `[DEADMAN][_alertRelatives] Alert sent to ${families.length} relatives.`
+        `[DEADMAN][_alertRelatives] DONE (normal). relatives=${families.length}`
       );
     } catch (err) {
       console.error("[DEADMAN][_alertRelatives][ERROR]:", err?.message || err);
