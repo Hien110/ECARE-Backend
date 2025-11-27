@@ -1,7 +1,9 @@
+
 const bcrypt = require("bcryptjs");
 const mongoose = require('mongoose');
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
+const SupporterScheduling = require("../models/SupporterScheduling");
 // Đảm bảo HealthPackage được require trước RegistrationHealthPackage để model được đăng ký
 const HealthPackage = require("../models/HealthPackage");
 const RegistrationHealthPackage = require("../models/RegistrationHealthPackage");
@@ -1555,6 +1557,26 @@ getAcceptRelationshipByFamilyIdAdmin: async (req, res) => {
     });
   }
 },
+  // Admin: Lấy danh sách lịch hẹn supporter theo status
+  getSupporterSchedulesByStatus: async (req, res) => {
+    try {
+      const { status } = req.query;
+      const query = {};
+      if (status) {
+        query.status = status;
+      }
+      // Populate các trường cần thiết
+      const schedules = await SupporterScheduling.find(query)
+        .populate({ path: 'supporter', select: 'fullName phoneNumber email' })
+        .populate({ path: 'elderly', select: 'fullName phoneNumber email' })
+        .populate({ path: 'service', select: 'name' })
+        .sort({ createdAt: -1 });
+      return res.status(200).json({ success: true, data: schedules });
+    } catch (err) {
+      console.error('[getSupporterSchedulesByStatus] Error:', err);
+      return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hẹn supporter' });
+    }
+  },
 };
 
 // Helper function: Tính khoảng cách Haversine (km)
