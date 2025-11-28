@@ -7,8 +7,23 @@ const RegistrationHealthPackage = require('../models/RegistrationHealthPackage')
 const isValidObjectId = (v) => typeof v === "string" && /^[a-fA-F0-9]{24}$/.test(v);
 const healthPackageController = {
  // Tạo mới gói khám
-   createHealthPackage: async (req, res) => {
+  createHealthPackage: async (req, res) => {
     try {
+<<<<<<< feat/package-manage
+      const { title, durations, service, description, isActive } = req.body;
+      if (!title || !description || !Array.isArray(service) || service.length === 0 || !Array.isArray(durations) || durations.length === 0) {
+        return res.status(400).json({ success: false, message: "Thiếu thông tin bắt buộc" });
+      }
+      // Kiểm tra durations
+      for (const f of durations) {
+        if (typeof f.days !== 'number' || f.days < 1 || typeof f.fee !== 'number' || f.fee < 0 || typeof f.isOption !== 'boolean') {
+          return res.status(400).json({ success: false, message: "durations phải hợp lệ (days > 0, fee >= 0, isOption boolean)" });
+        }
+      }
+      const healthPackage = await HealthPackage.create({
+        title,
+        durations,
+=======
       const { title, durationOptions, fees, customDuration, customDurationPrice, service, description, isActive } = req.body;
       if (!title || !description || !Array.isArray(service) || service.length === 0 || !Array.isArray(durationOptions) || durationOptions.length === 0 || !Array.isArray(fees) || fees.length === 0) {
         return res.status(400).json({ success: false, message: "Thiếu thông tin bắt buộc" });
@@ -34,6 +49,7 @@ const healthPackageController = {
         durationOptions,
         customDuration,
         customDurationPrice,
+>>>>>>> develop
         service,
         description,
         isActive
@@ -96,34 +112,22 @@ const healthPackageController = {
   },
 
   // Cập nhật gói khám
-   updateHealthPackage: async (req, res) => {
+  updateHealthPackage: async (req, res) => {
     try {
       const { id } = req.params;
       if (!isValidObjectId(id)) {
         return res.status(400).json({ success: false, message: "ID không hợp lệ" });
       }
       const updateData = req.body;
-      // Kiểm tra fees
-      if (updateData.fees) {
-        const validDurations = [30, 90, 180, 270, 365];
-        for (const f of updateData.fees) {
-          if (!validDurations.includes(f.days) || typeof f.fee !== 'number' || f.fee < 0) {
-            return res.status(400).json({ success: false, message: "fees phải hợp lệ và đúng mốc thời hạn" });
+      if (updateData.durations) {
+        if (!Array.isArray(updateData.durations) || updateData.durations.length === 0) {
+          return res.status(400).json({ success: false, message: "durations phải là mảng hợp lệ" });
+        }
+        for (const f of updateData.durations) {
+          if (typeof f.days !== 'number' || f.days < 1 || typeof f.fee !== 'number' || f.fee < 0 || typeof f.isOption !== 'boolean') {
+            return res.status(400).json({ success: false, message: "durations phải hợp lệ (days > 0, fee >= 0, isOption boolean)" });
           }
         }
-      }
-      // Nếu có customDuration thì kiểm tra hợp lệ
-      if ((updateData.customDuration && (typeof updateData.customDuration !== 'number' || updateData.customDuration < 1)) ||
-          (updateData.customDuration && (typeof updateData.customDurationPrice !== 'number' || updateData.customDurationPrice < 0))) {
-        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải hợp lệ" });
-      }
-      // Nếu có customDuration thì customDurationPrice phải có, và ngược lại
-      if ((updateData.customDuration && updateData.customDurationPrice === undefined) || (updateData.customDurationPrice !== undefined && !updateData.customDuration)) {
-        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải đi kèm nhau" });
-      }
-      // Nếu có durationOptions thì kiểm tra hợp lệ
-      if (updateData.durationOptions && (!Array.isArray(updateData.durationOptions) || updateData.durationOptions.length === 0)) {
-        return res.status(400).json({ success: false, message: "durationOptions phải là mảng số ngày hợp lệ" });
       }
       const updated = await HealthPackage.findByIdAndUpdate(id, updateData, { new: true });
       if (!updated) {

@@ -57,5 +57,7 @@ router.get("/status", AdminController.checkAdminStatus);
 router.get("/relationship/accepted-family/:familyId", AdminController.getAcceptRelationshipByFamilyIdAdmin);
 // Refresh admin token (không cần authorize vì đã có authenticateToken)
 router.post("/refresh-token", AdminController.refreshAdminToken);
+// Admin: Lấy danh sách lịch hẹn supporter theo status
+router.get("/supporter-schedules", AdminController.getSupporterSchedulesByStatus);
 
 module.exports = router;
