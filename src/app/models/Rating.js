@@ -11,7 +11,21 @@ const ratingSchema = new mongoose.Schema({
   reviewee: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+  },
+
+  // Id dịch vụ được đánh giá
+  serviceSupportId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SupporterScheduling',
+    default: null
+  },
+
+  // Id dịch vụ tư vấn bác sĩ
+  serviceConsultationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'RegistrationHealthPackage',
+    default: null
   },
   // Loại đánh giá
   ratingType: {
