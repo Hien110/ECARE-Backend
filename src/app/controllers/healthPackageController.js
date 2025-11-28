@@ -9,6 +9,7 @@ const healthPackageController = {
  // Tạo mới gói khám
   createHealthPackage: async (req, res) => {
     try {
+<<<<<<< feat/package-manage
       const { title, durations, service, description, isActive } = req.body;
       if (!title || !description || !Array.isArray(service) || service.length === 0 || !Array.isArray(durations) || durations.length === 0) {
         return res.status(400).json({ success: false, message: "Thiếu thông tin bắt buộc" });
@@ -22,6 +23,33 @@ const healthPackageController = {
       const healthPackage = await HealthPackage.create({
         title,
         durations,
+=======
+      const { title, durationOptions, fees, customDuration, customDurationPrice, service, description, isActive } = req.body;
+      if (!title || !description || !Array.isArray(service) || service.length === 0 || !Array.isArray(durationOptions) || durationOptions.length === 0 || !Array.isArray(fees) || fees.length === 0) {
+        return res.status(400).json({ success: false, message: "Thiếu thông tin bắt buộc" });
+      }
+      // Kiểm tra fees
+      const validDurations = [30, 90, 180, 270, 365];
+      for (const f of fees) {
+        if (!validDurations.includes(f.days) || typeof f.fee !== 'number' || f.fee < 0) {
+          return res.status(400).json({ success: false, message: "fees phải hợp lệ và đúng mốc thời hạn" });
+        }
+      }
+      // Kiểm tra customDuration và customDurationPrice nếu có
+      if ((customDuration && (typeof customDuration !== 'number' || customDuration < 1)) ||
+          (customDuration && (typeof customDurationPrice !== 'number' || customDurationPrice < 0))) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải hợp lệ" });
+      }
+      // Nếu có customDuration thì customDurationPrice phải có, và ngược lại
+      if ((customDuration && customDurationPrice === undefined) || (customDurationPrice !== undefined && !customDuration)) {
+        return res.status(400).json({ success: false, message: "customDuration và customDurationPrice phải đi kèm nhau" });
+      }
+      const healthPackage = await HealthPackage.create({
+        title,
+        durationOptions,
+        customDuration,
+        customDurationPrice,
+>>>>>>> develop
         service,
         description,
         isActive
