@@ -111,7 +111,6 @@ const healthPackageController = {
     }
   },
 
-  // Xóa gói khám
    removeHealthPackage: async (req, res) => {
     try {
       const { id } = req.params;
