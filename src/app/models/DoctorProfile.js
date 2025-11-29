@@ -22,6 +22,7 @@ const doctorProfileSchema = new mongoose.Schema(
     hospitalName: {
       type: String,
       required: true,
+
     },
     // Lịch làm việc và tư vấn
     schedule: [
