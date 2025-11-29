@@ -1,7 +1,9 @@
+
 const bcrypt = require("bcryptjs");
 const mongoose = require('mongoose');
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
+const SupporterScheduling = require("../models/SupporterScheduling");
 // Đảm bảo HealthPackage được require trước RegistrationHealthPackage để model được đăng ký
 const HealthPackage = require("../models/HealthPackage");
 const RegistrationHealthPackage = require("../models/RegistrationHealthPackage");
@@ -205,13 +207,7 @@ const decryptSingleUser = (user) => {
   return decrypted;
 };
 
-/* ===========================================================
-   📋 Validation functions for Excel import
-   =========================================================== */
-
-// Helper function to safely parse date from Excel
 const parseDateFromExcel = (dateInput) => {
-  console.log(`🔍 [parseDateFromExcel] Input:`, dateInput, typeof dateInput);
   
   if (!dateInput) return null;
   
@@ -222,25 +218,20 @@ const parseDateFromExcel = (dateInput) => {
   
   // Check if it's an Excel serial number (number between 1 and 100000)
   if (typeof dateInput === 'number' && dateInput > 1 && dateInput < 100000) {
-    console.log(`🔍 [parseDateFromExcel] Detected Excel serial number:`, dateInput);
     // Excel serial number: days since 1900-01-01 (with leap year bug)
     // Convert to actual date
     const excelEpoch = new Date(1900, 0, 1); // 1900-01-01
     const date = new Date(excelEpoch.getTime() + (dateInput - 2) * 24 * 60 * 60 * 1000);
-    console.log(`🔍 [parseDateFromExcel] Converted Excel serial to date:`, date);
     
     // Validate the converted date is reasonable (between 1900 and 2100)
     if (date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
-      console.log(`🔍 [parseDateFromExcel] Valid Excel serial date:`, date);
       return date;
     } else {
-      console.log(`🔍 [parseDateFromExcel] Invalid Excel serial date year:`, date.getFullYear());
     }
   }
   
   // Convert to string and try different formats
   const dateStr = String(dateInput).trim();
-  console.log(`🔍 [parseDateFromExcel] String version:`, dateStr);
   
   // Try different date formats
   const formats = [
@@ -250,35 +241,28 @@ const parseDateFromExcel = (dateInput) => {
   ];
   
   for (const format of formats) {
-    const match = dateStr.match(format);
-    console.log(`🔍 [parseDateFromExcel] Testing format ${format.source}:`, match);
-    
+    const match = dateStr.match(format);    
     if (match) {
       let year, month, day;
       
       if (format.source.includes('YYYY')) {
         // Format with year first
         [, year, month, day] = match;
-        console.log(`🔍 [parseDateFromExcel] Year-first format: year=${year}, month=${month}, day=${day}`);
       } else {
         // Format with month/day first
         [, month, day, year] = match;
-        console.log(`🔍 [parseDateFromExcel] Month-first format: year=${year}, month=${month}, day=${day}`);
       }
       
       // Create date object
       const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-      console.log(`🔍 [parseDateFromExcel] Created date:`, date);
       
       // Validate the date
       if (!isNaN(date.getTime()) && 
           date.getFullYear() == year && 
           date.getMonth() == month - 1 && 
           date.getDate() == day) {
-        console.log(`🔍 [parseDateFromExcel] Valid date found:`, date);
         return date;
       } else {
-        console.log(`🔍 [parseDateFromExcel] Invalid date validation failed`);
       }
     }
   }
@@ -306,19 +290,13 @@ const validateSupporterRow = (row, rowNumber) => {
   if (!row.dateOfBirth) {
     errors.push("Ngày sinh là bắt buộc");
   } else {
-    console.log(`🔍 [validateSupporterRow] Row ${rowNumber} - Raw dateOfBirth:`, row.dateOfBirth, typeof row.dateOfBirth);
     const birthDate = parseDateFromExcel(row.dateOfBirth);
-    console.log(`🔍 [validateSupporterRow] Row ${rowNumber} - Parsed birthDate:`, birthDate);
     
     if (!birthDate) {
       errors.push("Ngày sinh không hợp lệ");
     } else {
       const today = new Date();
       const age = today.getFullYear() - birthDate.getFullYear();
-      
-      console.log(`🔍 [validateSupporterRow] Row ${rowNumber} - Today:`, today.toISOString());
-      console.log(`🔍 [validateSupporterRow] Row ${rowNumber} - BirthDate:`, birthDate.toISOString());
-      console.log(`🔍 [validateSupporterRow] Row ${rowNumber} - Calculated age:`, age);
       
       if (age < 18) {
         errors.push("Tuổi phải từ 18 trở lên");
@@ -387,9 +365,6 @@ const validateDoctorRow = (row, rowNumber) => {
   };
 };
 
-/* ===========================================================
-   🧩 Admin Controller
-   =========================================================== */
 const AdminController = {
 
   // Admin: Lấy danh sách tất cả người dùng
@@ -404,16 +379,6 @@ const AdminController = {
       console.log(`🔍 [AdminController.getAllUsers] Found ${users.length} users`);
 
       const decrypted = decryptUserData(users);
-      
-      console.log(`✅ [AdminController.getAllUsers] Decrypted users data:`, 
-        decrypted.map(u => ({
-          fullName: u.fullName,
-          role: u.role,
-          email: u.email,
-          phoneNumber: u.phoneNumber,
-          address: u.address
-        }))
-      );
       
       return res.status(200).json({ success: true, data: decrypted });
     } catch (err) {
@@ -439,24 +404,7 @@ const AdminController = {
         return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
       }
 
-      console.log(`🔍 [AdminController.getUserById] Raw user data:`, {
-        fullName: user.fullName,
-        email: user.email,
-        emailEnc: user.emailEnc,
-        phoneNumber: user.phoneNumber,
-        phoneNumberEnc: user.phoneNumberEnc,
-        address: user.address,
-        addressEnc: user.addressEnc
-      });
-
       const [decrypted] = decryptUserData([user]);
-      
-      console.log(`✅ [AdminController.getUserById] Decrypted user data:`, {
-        fullName: decrypted?.fullName,
-        email: decrypted?.email,
-        phoneNumber: decrypted?.phoneNumber,
-        address: decrypted?.address
-      });
       
       return res.status(200).json({ success: true, data: decrypted });
     } catch (err) {
@@ -540,10 +488,7 @@ const AdminController = {
 
       const newUser = await User.create(userData);
 
-      await SupporterProfile.create({
-        user: newUser._id,
-        sessionFee: { morning: 0, afternoon: 0, evening: 0 }
-      });
+      // Không tạo SupporterProfile ở đây nữa
 
       return res.status(201).json({
         success: true,
@@ -642,23 +587,7 @@ const AdminController = {
 
       const newUser = await User.create(userData);
 
-      // Tạo hồ sơ bác sĩ tối thiểu để tránh thiếu dữ liệu ở bảng doctor profiles
-      try {
-        const DoctorProfile = require("../models/DoctorProfile");
-        const existed = await DoctorProfile.findOne({ user: newUser._id });
-        if (!existed) {
-          await DoctorProfile.create({
-            user: newUser._id,
-            specializations: "General",
-            experience: 0,
-            hospitalName: "N/A",
-            consultationFees: { online: 0, offline: 0 },
-            schedule: [],
-          });
-        }
-      } catch (e) {
-        console.error("[createDoctor] Failed to create DoctorProfile:", e?.message || e);
-      }
+      // Không tạo DoctorProfile ở đây nữa
 
       return res.status(201).json({
         success: true,
@@ -681,8 +610,6 @@ const AdminController = {
   getSupporterProfile: async (req, res) => {
     try {
       const { userId } = req.params;
-      console.log(`🔍 [AdminController.getSupporterProfile] Requested user ID: ${userId}`);
-
       if (!isValidObjectId(userId)) {
         return res.status(400).json({ success: false, message: "ID người dùng không hợp lệ" });
       }
@@ -698,25 +625,9 @@ const AdminController = {
         return res.status(400).json({ success: false, message: "Người dùng này không phải là supporter" });
       }
 
-      console.log(`🔍 [AdminController.getSupporterProfile] Raw user data:`, {
-        fullName: user.fullName,
-        email: user.email,
-        emailEnc: user.emailEnc,
-        phoneNumber: user.phoneNumber,
-        phoneNumberEnc: user.phoneNumberEnc,
-        address: user.address,
-        addressEnc: user.addressEnc
-      });
 
       const supporterProfile = await SupporterProfile.findOne({ user: userId });
       const [decryptedUser] = decryptUserData([user]);
-
-      console.log(`✅ [AdminController.getSupporterProfile] Decrypted user data:`, {
-        fullName: decryptedUser?.fullName,
-        email: decryptedUser?.email,
-        phoneNumber: decryptedUser?.phoneNumber,
-        address: decryptedUser?.address
-      });
 
       const combinedData = {
         ...supporterProfile?.toObject(),
@@ -765,25 +676,11 @@ const AdminController = {
 
   // Admin: Lấy danh sách tất cả supporters
   getAllSupporters: async (req, res) => {
-    try {
-      console.log(`🔍 [AdminController.getAllSupporters] Fetching all supporters`);
-      
+    try {      
       const supporters = await User.find({ role: "supporter" })
         .select("fullName phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc isActive createdAt gender dateOfBirth +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
         .sort({ createdAt: -1 });
-
-      console.log(`🔍 [AdminController.getAllSupporters] Found ${supporters.length} supporters`);
-
       const decryptedSupporters = decryptUserData(supporters);
-      
-      console.log(`✅ [AdminController.getAllSupporters] Decrypted supporters data:`, 
-        decryptedSupporters.map(s => ({
-          fullName: s.fullName,
-          email: s.email,
-          phoneNumber: s.phoneNumber,
-          address: s.address
-        }))
-      );
       
       return res.status(200).json({ success: true, data: decryptedSupporters });
 
@@ -872,8 +769,6 @@ const AdminController = {
         return res.status(400).json({ success: false, message: "Không có file được upload" });
       }
 
-      console.log(`🔍 [AdminController.bulkImportSupporters] Processing file: ${req.file.originalname}`);
-
       // Đọc file Excel
       const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
@@ -883,8 +778,6 @@ const AdminController = {
       if (data.length === 0) {
         return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
       }
-
-      console.log(`🔍 [AdminController.bulkImportSupporters] Found ${data.length} rows`);
 
       const results = {
         success: [],
@@ -896,8 +789,6 @@ const AdminController = {
       for (let i = 0; i < data.length; i++) {
         const row = data[i];
         const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
-
-        console.log(`🔍 [bulkImportSupporters] Processing row ${rowNumber}:`, row);
 
         try {
           // Validate dữ liệu
@@ -933,7 +824,6 @@ const AdminController = {
           }
 
           // Tạo user data
-          console.log(`🔍 [bulkImportSupporters] Row ${rowNumber} - Raw password:`, row.password, typeof row.password);
           const hashedPassword = await bcrypt.hash(String(row.password), 12);
           const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
           
@@ -979,8 +869,6 @@ const AdminController = {
             fullName: newUser.fullName,
             phoneNumber: normalizedPhone
           });
-
-          console.log(`✅ [AdminController.bulkImportSupporters] Created supporter at row ${rowNumber}: ${newUser.fullName}`);
 
         } catch (err) {
           console.error(`❌ [AdminController.bulkImportSupporters] Error at row ${rowNumber}:`, err);
@@ -1089,7 +977,6 @@ const AdminController = {
           }
 
           // Tạo user data
-          console.log(`🔍 [bulkImportSupporters] Row ${rowNumber} - Raw password:`, row.password, typeof row.password);
           const hashedPassword = await bcrypt.hash(String(row.password), 12);
           const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
           
@@ -1129,7 +1016,6 @@ const AdminController = {
             email: row.email
           });
 
-          console.log(`✅ [AdminController.bulkImportDoctors] Created doctor at row ${rowNumber}: ${newUser.fullName}`);
 
         } catch (err) {
           console.error(`❌ [AdminController.bulkImportDoctors] Error at row ${rowNumber}:`, err);
@@ -1140,9 +1026,6 @@ const AdminController = {
           });
         }
       }
-
-      console.log(`📊 [AdminController.bulkImportDoctors] Results: ${results.success.length} success, ${results.errors.length} errors`);
-
       return res.status(200).json({
         success: true,
         message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
@@ -1150,7 +1033,6 @@ const AdminController = {
       });
 
     } catch (err) {
-      console.error("❌ [AdminController.bulkImportDoctors] Error:", err);
       return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
     }
   }
@@ -1263,7 +1145,6 @@ const AdminController = {
             return d;
           });
         } catch (decryptErr) {
-          console.error('❌ [AdminController.getRegisteredPackages] Decrypt error:', decryptErr);
           // Continue without decryption if it fails - return data as-is
         }
       }
@@ -1278,8 +1159,6 @@ const AdminController = {
         }
       });
     } catch (err) {
-      console.error('❌ [AdminController.getRegisteredPackages] Error:', err);
-      console.error('❌ [AdminController.getRegisteredPackages] Stack:', err.stack);
       return res.status(500).json({ 
         success: false, 
         message: 'Đã xảy ra lỗi khi lấy danh sách gói khám đã đăng ký',
@@ -1338,15 +1217,12 @@ const AdminController = {
             doc.doctor = decMap[String(doc.doctor._id)];
           }
         } catch (decryptErr) {
-          console.error('❌ [AdminController.getRegisteredPackageById] Decrypt error:', decryptErr);
           // Continue without decryption if it fails
         }
       }
 
       return res.status(200).json({ success: true, data: doc });
     } catch (err) {
-      console.error('❌ [AdminController.getRegisteredPackageById] Error:', err);
-      console.error('❌ [AdminController.getRegisteredPackageById] Stack:', err.stack);
       return res.status(500).json({ 
         success: false, 
         message: 'Đã xảy ra lỗi khi lấy chi tiết đăng ký gói khám',
@@ -1543,8 +1419,6 @@ const AdminController = {
         }
       });
     } catch (err) {
-      console.error('❌ [AdminController.getNearbyDoctors] Error:', err);
-      console.error('❌ [AdminController.getNearbyDoctors] Stack:', err.stack);
       return res.status(500).json({ 
         success: false, 
         message: 'Đã xảy ra lỗi khi lấy danh sách bác sĩ gần nhất',
@@ -1634,7 +1508,6 @@ const AdminController = {
             updatedRegistration.doctor = decMap[String(updatedRegistration.doctor._id)];
           }
         } catch (decryptErr) {
-          console.error('❌ [AdminController.assignDoctorToRegistration] Decrypt error:', decryptErr);
         }
       }
 
@@ -1644,15 +1517,66 @@ const AdminController = {
         data: updatedRegistration
       });
     } catch (err) {
-      console.error('❌ [AdminController.assignDoctorToRegistration] Error:', err);
-      console.error('❌ [AdminController.assignDoctorToRegistration] Stack:', err.stack);
       return res.status(500).json({ 
         success: false, 
         message: 'Đã xảy ra lỗi khi gán bác sĩ',
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
+  },
+// GET /relationships/accepted-family/:familyId
+getAcceptRelationshipByFamilyIdAdmin: async (req, res) => {
+  try {
+    const { familyId } = req.params;
+    if (!familyId || typeof familyId !== 'string') {
+      console.log("[getAcceptRelationshipByFamilyIdAdmin] familyId missing or invalid");
+      return res.status(400).json({ success: false, message: "Thiếu hoặc sai familyId" });
+    }
+    const Relationship = require("../models/Relationship");
+    const relationships = await Relationship.find({
+      family: familyId,
+      status: "accepted",
+    })
+      .populate(
+        "elderly",
+        "fullName avatar phoneNumber phoneNumberEnc addressEnc addressHash currentLocation _id"
+      )
+      .populate("requestedBy", "fullName avatar phoneNumber phoneNumberEnc");
+
+    const decryptedRelationships = typeof decryptPhoneNumbers === 'function' ? decryptPhoneNumbers(relationships) : relationships;
+
+    return res.status(200).json({
+      success: true,
+      data: decryptedRelationships,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: error?.message || error
+    });
   }
+},
+  // Admin: Lấy danh sách lịch hẹn supporter theo status
+  getSupporterSchedulesByStatus: async (req, res) => {
+    try {
+      const { status } = req.query;
+      const query = {};
+      if (status) {
+        query.status = status;
+      }
+      // Populate các trường cần thiết
+      const schedules = await SupporterScheduling.find(query)
+        .populate({ path: 'supporter', select: 'fullName phoneNumber email' })
+        .populate({ path: 'elderly', select: 'fullName phoneNumber email' })
+        .populate({ path: 'service', select: 'name' })
+        .sort({ createdAt: -1 });
+      return res.status(200).json({ success: true, data: schedules });
+    } catch (err) {
+      console.error('[getSupporterSchedulesByStatus] Error:', err);
+      return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hẹn supporter' });
+    }
+  },
 };
 
 // Helper function: Tính khoảng cách Haversine (km)
