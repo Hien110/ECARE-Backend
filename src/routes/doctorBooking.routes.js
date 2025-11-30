@@ -15,5 +15,7 @@ router.get("/doctors/:doctorId", DoctorBookingController.getDoctorDetail);
 router.post("/book", DoctorBookingController.createBooking);
 router.get("/my-bookings", DoctorBookingController.getMyBookings);
 router.get("/registrations/:id", DoctorBookingController.getRegistrationDetail);
+router.get("/by-elderly/:elderlyId", DoctorBookingController.getBookingsByElderlyId);
+router.post("/registrations/:id/cancel", DoctorBookingController.cancelBooking);
 
 module.exports = router;

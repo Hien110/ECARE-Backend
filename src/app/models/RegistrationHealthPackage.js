@@ -20,6 +20,12 @@ const RegistrationHealthPackageSchema = new mongoose.Schema({
   price: { type: Number, min: 0 },
 
   description: { type: String },
+
+  status: {
+    type: String,
+    enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled'],
+    default: 'pending',
+  },
 }, { timestamps: true });
 
 // nếu durationDays được cung cấp hoặc suy ra, hãy tính expiresAt trước khi lưu
