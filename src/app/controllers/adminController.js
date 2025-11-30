@@ -1,5 +1,4 @@
 
-const bcrypt = require("bcryptjs");
 const mongoose = require('mongoose');
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
@@ -441,7 +440,25 @@ const AdminController = {
       });
     }
   },
-
+  resetUserPassword: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "ID người dùng không hợp lệ" });
+      }
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
+      }
+      const newPassword = await bcrypt.hash("1", 12);
+      user.password = newPassword;
+      await user.save();
+      return res.status(200).json({ success: true, message: "Đã reset mật khẩu về '1'" });
+    } catch (err) {
+      console.error("Error resetting user password:", err);
+      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi reset mật khẩu" });
+    }
+  },
   // Admin: Lấy danh sách tất cả người dùng
   getAllUsers: async (req, res) => {
     try {
@@ -709,8 +726,8 @@ const AdminController = {
     }
   },
 
-  // Admin: Cập nhật trạng thái hoạt động của supporter
-  setSupporterActive: async (req, res) => {
+  // Admin: Cập nhật trạng thái hoạt động của bất kỳ user nào
+  setUserActive: async (req, res) => {
     try {
       const { userId } = req.params;
       const { isActive } = req.body;
@@ -723,12 +740,11 @@ const AdminController = {
         return res.status(400).json({ success: false, message: "Trạng thái isActive phải là boolean" });
       }
 
-      // Allow updating isActive for any user (not restricted to supporters)
+      // Cập nhật trạng thái isActive cho bất kỳ user nào
       const user = await User.findByIdAndUpdate(userId, { isActive }, { new: true, select: "fullName role isActive" });
 
       if (!user) return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
 
-      // Generic messages (not role-specific)
       return res.status(200).json({
         success: true,
         message: isActive ? "Đã mở khóa tài khoản" : "Đã khóa tài khoản",
@@ -736,8 +752,8 @@ const AdminController = {
       });
 
     } catch (err) {
-      console.error("Error updating supporter status:", err);
-      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi cập nhật trạng thái supporter" });
+      console.error("Error updating user status:", err);
+      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi cập nhật trạng thái người dùng" });
     }
   },
 

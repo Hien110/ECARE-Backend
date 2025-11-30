@@ -29,7 +29,7 @@ router.use(authorize("admin")); // Chỉ admin mới có thể truy cập
 // Admin supporter management routes
 router.post("/supporters", AdminController.createSupporter);
 router.get("/supporters/:userId", AdminController.getSupporterProfile);
-router.patch("/supporters/:userId/status", AdminController.setSupporterActive);
+router.patch("/status/:userId", AdminController.setUserActive);
 router.get("/supporters", AdminController.getAllSupporters);
 router.post("/supporters/bulk-import", upload.single('file'), AdminController.bulkImportSupporters);
 
@@ -57,6 +57,7 @@ router.get("/status", AdminController.checkAdminStatus);
 router.get("/relationship/accepted-family/:familyId", AdminController.getAcceptRelationshipByFamilyIdAdmin);
 // Refresh admin token (không cần authorize vì đã có authenticateToken)
 router.post("/refresh-token", AdminController.refreshAdminToken);
+router.put("/reset-password/:userId", AdminController.resetUserPassword);
 // Admin: Lấy danh sách lịch hẹn supporter theo status
 router.get("/supporter-schedules", AdminController.getSupporterSchedulesByStatus);
 router.get("/package/:doctorId", AdminController.getPackagesByDoctor);
