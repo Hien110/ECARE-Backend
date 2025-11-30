@@ -16,6 +16,10 @@ const consultationSchema = new mongoose.Schema({
     ref: 'User',
     required: true // Có thể là elderly hoặc family
   },
+  registration: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'RegistrationHealthPackage'
+  },
   consultationType: {
     type: String,
     enum: ['online', 'offline'],
@@ -99,7 +103,7 @@ const consultationSchema = new mongoose.Schema({
   payment: {
     method: {
       type: String,
-      enum: ['vnpay', 'momo', 'bank_transfer', 'cash']
+      enum: ['vnpay', 'momo', 'bank_transfer', 'cash', 'qr']
     },
     status: {
       type: String,
