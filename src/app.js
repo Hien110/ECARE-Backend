@@ -18,6 +18,7 @@ app.use(
       "http://localhost:3000",
       "http://192.168.0.109:3000",
       "https://black-wave-0366edf00.3.azurestaticapps.net",
+      "https://www.ecare.io.vn"
     ],
     credentials: true,
   })
