@@ -59,5 +59,6 @@ router.get("/relationship/accepted-family/:familyId", AdminController.getAcceptR
 router.post("/refresh-token", AdminController.refreshAdminToken);
 // Admin: Lấy danh sách lịch hẹn supporter theo status
 router.get("/supporter-schedules", AdminController.getSupporterSchedulesByStatus);
+router.get("/package/:doctorId", AdminController.getPackagesByDoctor);
 
 module.exports = router;

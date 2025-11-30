@@ -32,7 +32,7 @@ const paymentSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['vnpay', 'momo', 'bank_transfer', 'cash', 'wallet'],
+    enum: ['vnpay', 'momo', 'bank_transfer', 'cash', 'wallet', 'qr'],
     required: true
   },
   // Thông tin giao dịch

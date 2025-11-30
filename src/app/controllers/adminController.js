@@ -269,7 +269,6 @@ const parseDateFromExcel = (dateInput) => {
   
   // Try direct parsing as last resort
   const directParse = new Date(dateStr);
-  console.log(`🔍 [parseDateFromExcel] Direct parse result:`, directParse);
   return isNaN(directParse.getTime()) ? null : directParse;
 };
 const validateSupporterRow = (row, rowNumber) => {
@@ -366,17 +365,90 @@ const validateDoctorRow = (row, rowNumber) => {
 };
 
 const AdminController = {
+  // Admin: Lấy danh sách các gói khám mà bác sĩ đã đảm nhận
+  getPackagesByDoctor: async (req, res) => {
+    try {
+      const { doctorId } = req.params;
+      if (!isValidObjectId(doctorId)) {
+        return res.status(400).json({ success: false, message: "ID bác sĩ không hợp lệ" });
+      }
+
+      // Tìm tất cả các đăng ký gói khám mà bác sĩ này đã đảm nhận
+      let docs = await RegistrationHealthPackage.find({ doctor: doctorId })
+        .populate('packageRef', 'title durations price description isActive')
+        .populate({
+          path: 'beneficiary',
+          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc avatar +phoneNumberEnc +emailEnc'
+        })
+        .populate({
+          path: 'registrant',
+          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
+        .sort({ registeredAt: -1 })
+        .lean();
+
+      // Decrypt populated users (beneficiary/registrant) in batch
+      const usersToDecrypt = [];
+      docs.forEach(d => {
+        if (d.beneficiary && d.beneficiary._id) usersToDecrypt.push(d.beneficiary);
+        if (d.registrant && d.registrant._id) usersToDecrypt.push(d.registrant);
+      });
+      // Unique by _id
+      const uniq = {};
+      const uniqueUsers = [];
+      usersToDecrypt.forEach(u => {
+        if (!u || !u._id) return;
+        const id = String(u._id);
+        if (!uniq[id]) {
+          uniq[id] = true;
+          uniqueUsers.push(u);
+        }
+      });
+      // Decrypt users safely
+      if (uniqueUsers.length > 0) {
+        try {
+          const decrypted = decryptUserData(uniqueUsers);
+          const decMap = {};
+          decrypted.forEach(u => {
+            if (u && u._id) {
+              decMap[String(u._id)] = u;
+            }
+          });
+          // attach decrypted users back to docs
+          docs = docs.map(d => {
+            if (d.beneficiary && d.beneficiary._id && decMap[String(d.beneficiary._id)]) {
+              d.beneficiary = decMap[String(d.beneficiary._id)];
+            }
+            if (d.registrant && d.registrant._id && decMap[String(d.registrant._id)]) {
+              d.registrant = decMap[String(d.registrant._id)];
+            }
+            return d;
+          });
+        } catch (decryptErr) {
+          // Continue without decryption if it fails
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: docs
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: 'Đã xảy ra lỗi khi lấy danh sách gói khám bác sĩ đã đảm nhận',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    }
+  },
 
   // Admin: Lấy danh sách tất cả người dùng
   getAllUsers: async (req, res) => {
     try {
-      console.log(`🔍 [AdminController.getAllUsers] Fetching all users`);
       
       const users = await User.find({})
         .select("fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc gender dateOfBirth createdAt avatar +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
         .sort({ createdAt: -1 });
-
-      console.log(`🔍 [AdminController.getAllUsers] Found ${users.length} users`);
 
       const decrypted = decryptUserData(users);
       
@@ -390,7 +462,6 @@ const AdminController = {
   getUserById: async (req, res) => {
     try {
       const { userId } = req.params;
-      console.log(`🔍 [AdminController.getUserById] Requested user ID: ${userId}`);
       
       if (!isValidObjectId(userId)) {
         return res.status(400).json({ success: false, message: "ID người dùng không hợp lệ" });
@@ -400,7 +471,6 @@ const AdminController = {
         .select("fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc gender dateOfBirth createdAt avatar identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc");
       
       if (!user) {
-        console.log(`❌ [AdminController.getUserById] User not found: ${userId}`);
         return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
       }
 
@@ -416,7 +486,6 @@ const AdminController = {
   // Admin: Tạo tài khoản supporter
   createSupporter: async (req, res) => {
     try {
-      console.log("[createSupporter] Incoming request body:", req.body);
       const { fullName, phoneNumber, gender, password, email, dateOfBirth, address, identityCard } = req.body;
 
       if (!fullName || !phoneNumber || !gender || !password || !dateOfBirth || !identityCard) {
@@ -455,7 +524,6 @@ const AdminController = {
 
       // Check identityCard uniqueness
       const identityCardHash = identityCard ? hmacIndex(String(identityCard)) : null;
-      console.log("[createSupporter] identityCard:", identityCard, "hash:", identityCardHash);
       if (identityCardHash) {
         const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
         if (existingIdentityCard) {
@@ -618,7 +686,6 @@ const AdminController = {
         .select("fullName phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc role isActive avatar gender dateOfBirth createdAt +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc");
 
       if (!user) {
-        console.log(`❌ [AdminController.getSupporterProfile] User not found: ${userId}`);
         return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
       }
       if (user.role !== "supporter") {
@@ -722,7 +789,6 @@ const AdminController = {
     }
   },
 
-  // Admin: Refresh token
   refreshAdminToken: async (req, res) => {
     try {
       const userId = req.user?.userId;
@@ -762,7 +828,6 @@ const AdminController = {
     }
   },
 
-  // Admin: Bulk import supporters from Excel
   bulkImportSupporters: async (req, res) => {
     try {
       if (!req.file) {
@@ -880,7 +945,6 @@ const AdminController = {
         }
       }
 
-      console.log(`📊 [AdminController.bulkImportSupporters] Results: ${results.success.length} success, ${results.errors.length} errors`);
 
       return res.status(200).json({
         success: true,
@@ -894,16 +958,12 @@ const AdminController = {
     }
   },
 
-  // Admin: Bulk import doctors from Excel
   bulkImportDoctors: async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ success: false, message: "Không có file được upload" });
       }
 
-      console.log(`🔍 [AdminController.bulkImportDoctors] Processing file: ${req.file.originalname}`);
-
-      // Đọc file Excel
       const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
@@ -912,9 +972,6 @@ const AdminController = {
       if (data.length === 0) {
         return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
       }
-
-      console.log(`🔍 [AdminController.bulkImportDoctors] Found ${data.length} rows`);
-
       const results = {
         success: [],
         errors: [],
@@ -925,9 +982,6 @@ const AdminController = {
       for (let i = 0; i < data.length; i++) {
         const row = data[i];
         const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
-
-        console.log(`🔍 [bulkImportDoctors] Processing row ${rowNumber}:`, row);
-
         try {
           // Validate dữ liệu
           const validation = validateDoctorRow(row, rowNumber);
@@ -1529,7 +1583,6 @@ getAcceptRelationshipByFamilyIdAdmin: async (req, res) => {
   try {
     const { familyId } = req.params;
     if (!familyId || typeof familyId !== 'string') {
-      console.log("[getAcceptRelationshipByFamilyIdAdmin] familyId missing or invalid");
       return res.status(400).json({ success: false, message: "Thiếu hoặc sai familyId" });
     }
     const Relationship = require("../models/Relationship");
