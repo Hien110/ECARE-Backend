@@ -474,14 +474,28 @@ const RelationshipController = {
   },
 
   getAcceptRelationshipByUserId: async (req, res) => {
-    try {
-      const userId = req.user.userId; // Lấy từ token JWT
-      const relationships = await Relationship.find({
-        elderly: userId,
-        status: "accepted",
+  try {
+    const userId = req.user.userId; // Lấy từ token JWT
+    // Lấy tất cả mối quan hệ đã ACCEPTED mà user đang là elderly HOẶC family
+    const relationships = await Relationship.find({
+      status: "accepted",
+      $or: [
+        { elderly: userId },
+        { family: userId },
+      ],
       })
-        .populate("elderly", "fullName avatar phoneNumber phoneNumberEnc")
-        .populate("requestedBy", "fullName avatar phoneNumber phoneNumberEnc");
+        .populate(
+          "elderly",
+          "fullName avatar phoneNumber phoneNumberEnc addressEnc addressHash currentLocation role _id"
+        )
+        .populate(
+          "family",
+          "fullName avatar phoneNumber phoneNumberEnc role _id"
+        )
+        .populate(
+          "requestedBy",
+          "fullName avatar phoneNumber phoneNumberEnc role _id"
+        );
 
       const decryptedRelationships = decryptPhoneNumbers(relationships);
 
