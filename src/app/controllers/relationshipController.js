@@ -526,6 +526,82 @@ const RelationshipController = {
     }
   },
 
+  // Lấy tất cả mối quan hệ theo familyId (truyền vào param), trả về tên đã populate và giải mã số điện thoại
+  getAllRelationshipsByFamilyId: async (req, res) => {
+    try {
+      const { familyId } = req.params;
+      const { status } = req.query; // optional: filter theo trạng thái
+
+      if (!familyId) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu thông tin familyId",
+        });
+      }
+
+      const familyUser = await User.findById(familyId).select("role fullName avatar phoneNumber phoneNumberEnc");
+      if (!familyUser) {
+        return res.status(404).json({
+          success: false,
+          message: "Không tìm thấy người dùng family",
+        });
+      }
+      if (familyUser.role !== "family") {
+        return res.status(400).json({
+          success: false,
+          message: "familyId không thuộc role family",
+        });
+      }
+
+      const findFilter = { family: familyId };
+      if (status) {
+        findFilter.status = status;
+      }
+
+      const relationships = await Relationship.find(findFilter)
+        .populate("elderly", "fullName avatar phoneNumber phoneNumberEnc _id")
+        .populate("family", "fullName avatar phoneNumber phoneNumberEnc _id")
+        .populate("requestedBy", "fullName avatar phoneNumber phoneNumberEnc _id");
+
+      const decrypted = decryptPhoneNumbers(relationships);
+
+      // Chuẩn hóa dữ liệu phản hồi chỉ tập trung vào người nhà (elderly) và mối quan hệ
+      const result = decrypted.map((rel) => ({
+        relationshipId: rel._id,
+        status: rel.status,
+        relationship: rel.relationship,
+        elderly: rel.elderly
+          ? {
+              _id: rel.elderly._id,
+              fullName: rel.elderly.fullName || "Ẩn danh",
+              avatar: rel.elderly.avatar,
+              phoneNumber: rel.elderly.phoneNumber || null,
+            }
+          : null,
+        // Chỉ trả tối thiểu thông tin family cho đối chiếu
+        family: rel.family
+          ? {
+              _id: rel.family._id,
+              fullName: rel.family.fullName || "Ẩn danh",
+            }
+          : null,
+        createdAt: rel.createdAt,
+        updatedAt: rel.updatedAt,
+      }));
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error fetching relationships by familyId:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error",
+      });
+    }
+  },
+
   cancelRelationship: async (req, res) => {
     try {
       const { relationshipId } = req.params;
