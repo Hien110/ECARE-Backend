@@ -1,6 +1,7 @@
 // controllers/supporterScheduling.controller.js
 const SupporterScheduling = require("../models/SupporterScheduling");
 const SupporterService = require("../models/SupporterServices");
+const User = require("../models/User");
 
 // TODO: thay bằng util thực của bạn
 const { encryptField, tryDecryptField } = require("./userController");
@@ -591,6 +592,184 @@ const schedulingController = {
       });
     }
   },
+    /**
+   * GET /api/schedulings/supporter-detail/:id
+   * -> Lấy chi tiết supporter (User) + giải mã địa chỉ / số điện thoại / email
+   */
+  getSupporterDetail: async (req, res) => {
+  try {
+    // Ưu tiên lấy từ params, fallback sang query/body cho linh hoạt
+    const supporterId =
+      req.params.id ||
+      req.params.supporterId ||
+      req.query.supporterId ||
+      (req.body && req.body.supporterId);
+
+    if (!supporterId) {
+      return res.status(400).json({
+        success: false,
+        message: "Thiếu supporterId.",
+      });
+    }
+
+    // Lấy user (supporter) từ DB
+    const supporter = await User.findById(supporterId).lean();
+    if (!supporter) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy supporter.",
+      });
+    }
+
+    // ====== Setup giải mã ======
+    const crypto = require("crypto");
+    const ENC_KEY_RAW = process.env.ENC_KEY || "";
+    const ENC_KEY = ENC_KEY_RAW ? Buffer.from(ENC_KEY_RAW, "base64") : null;
+
+    const decryptLegacy = (enc) => {
+      if (!enc || !ENC_KEY) return null;
+      try {
+        // Định dạng: ivB64:ctB64:tagB64
+        const [ivB64, ctB64, tagB64] = String(enc).split(":");
+        if (!ivB64 || !ctB64 || !tagB64) return null;
+        const iv = Buffer.from(ivB64, "base64");
+        const ct = Buffer.from(ctB64, "base64");
+        const tag = Buffer.from(tagB64, "base64");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+      } catch (e) {
+        console.error("[getSupporterDetail] decryptLegacy error:", e.message);
+        return null;
+      }
+    };
+
+    const decryptGCM = (packed) => {
+      if (!packed || !ENC_KEY) return null;
+      try {
+        // Định dạng: iv.tag.data (base64url)
+        const [ivB64, tagB64, dataB64] = String(packed).split(".");
+        if (!ivB64 || !tagB64 || !dataB64) return null;
+        const iv = Buffer.from(ivB64, "base64url");
+        const tag = Buffer.from(tagB64, "base64url");
+        const data = Buffer.from(dataB64, "base64url");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(data), d.final()]).toString("utf8");
+      } catch (e) {
+        console.error("[getSupporterDetail] decryptGCM error:", e.message);
+        return null;
+      }
+    };
+
+    // Thử giải mã 1 giá trị (GCM, legacy). Nếu không giải mã được thì trả lại string gốc.
+    const tryDecryptAny = (v) => {
+      if (v == null || v === "") return null;
+      const s = String(v);
+
+      // Không có ENC_KEY => không decrypt được, trả nguyên string (tránh crash)
+      if (!ENC_KEY) return s;
+
+      try {
+        if (s.includes(".")) {
+          const dec = decryptGCM(s);
+          if (dec != null) return dec;
+        }
+        if (s.includes(":")) {
+          const dec = decryptLegacy(s);
+          if (dec != null) return dec;
+        }
+        // Không nhận dạng được format → coi là plain text
+        return s;
+      } catch (e) {
+        console.error("[getSupporterDetail] tryDecryptAny error:", e.message);
+        return s;
+      }
+    };
+
+    // Helper: chọn giá trị đầu tiên khác null/"" theo list key
+    const pickFirstNonEmpty = (doc, keys = []) => {
+      for (const k of keys) {
+        if (!k) continue;
+        if (Object.prototype.hasOwnProperty.call(doc, k)) {
+          const val = doc[k];
+          if (val !== undefined && val !== null && val !== "") {
+            return val;
+          }
+        }
+      }
+      return null;
+    };
+
+    // Helper decode 1 field với nhiều key enc + plain
+    const decodeField = (encKeys = [], plainKeys = []) => {
+      const rawEnc = pickFirstNonEmpty(supporter, encKeys);
+      const rawPlain = pickFirstNonEmpty(supporter, plainKeys);
+      const raw = rawEnc != null ? rawEnc : rawPlain;
+
+      if (raw == null) return null;
+
+      const decrypted = tryDecryptAny(raw);
+      return decrypted != null ? String(decrypted).trim() : String(raw).trim();
+    };
+
+    // ====== Giải mã các field nhạy cảm ======
+    const phoneNumberDec = decodeField(
+      ["phoneNumberEnc", "phoneEnc"],
+      ["phoneNumber", "phone", "mobile", "mobileNumber"]
+    );
+    const emailDec = decodeField(["emailEnc"], ["email"]);
+    const addressDec = decodeField(
+      ["addressEnc", "addrEnc"],
+      ["address", "addr"]
+    );
+    const currentAddressDec = decodeField(
+      ["currentAddressEnc"],
+      ["currentAddress", "addressCurrent"]
+    );
+    const hometownDec = decodeField(
+      ["hometownEnc"],
+      ["hometown", "homeTown"]
+    );
+
+    // ====== Tạo object trả về cho FE (KHÔNG expose field mã hoá) ======
+    const responseSupporter = {
+      _id: supporter._id,
+      fullName: supporter.fullName,
+      role: supporter.role,
+      gender: supporter.gender,
+      avatar: supporter.avatar,
+
+      // ƯU TIÊN GIÁ TRỊ ĐÃ GIẢI MÃ, fallback về field thô nếu vẫn null
+      phoneNumber:
+        phoneNumberDec ??
+        supporter.phoneNumber ??
+        supporter.phone ??
+        null,
+      email: emailDec ?? supporter.email ?? null,
+      address: addressDec ?? supporter.address ?? null,
+      currentAddress:
+        currentAddressDec ?? supporter.currentAddress ?? null,
+      hometown: hometownDec ?? supporter.hometown ?? null,
+    };
+
+    // Không cache thông tin nhạy cảm
+    res.set("Cache-Control", "no-store");
+
+    return res.status(200).json({
+      success: true,
+      data: responseSupporter,
+      message: "Lấy chi tiết người hỗ trợ thành công",
+    });
+  } catch (error) {
+    console.error("Error fetching supporter detail:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Lấy chi tiết supporter thất bại",
+      error: error?.message || error,
+    });
+  }
+},
 };
 
 module.exports = schedulingController;
