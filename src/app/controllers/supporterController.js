@@ -1,17 +1,110 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const User = require("../models/User.js");
 const SupporterProfile = require("../models/SupporterProfile.js");
-const SupporterScheduling = require('../models/SupporterScheduling'); 
+const SupporterScheduling = require('../models/SupporterScheduling');
 const buildConflictQuery = require('../../utils/buildConflictQuery');
+
 // Không dùng mongoose.Types.ObjectId — kiểm tra bằng regex 24 hex
 const isValidObjectId = (v) => typeof v === "string" && /^[a-fA-F0-9]{24}$/.test(v);
 
 const VALID_TIME_SLOTS = ["morning", "afternoon", "evening"];
 const BANK_CARD_NUMBER_RE = /^\d{12,19}$/;
 
+// ====== ENC helpers (dựa trên getUserInfo trong UserController) ======
+const ENC_KEY = Buffer.from(process.env.ENC_KEY || '', 'base64');
+
+const decryptLegacy = (enc) => {
+  if (!enc) return null;
+  if (!ENC_KEY || ENC_KEY.length === 0) return null;
+  const parts = String(enc).split(':');
+  if (parts.length !== 3) return null;
+  const [ivB64, ctB64, tagB64] = parts;
+  const iv  = Buffer.from(ivB64, 'base64');
+  const ct  = Buffer.from(ctB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', ENC_KEY, iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+};
+
+const decryptGCM = (packed) => {
+  if (!packed) return null;
+  if (!ENC_KEY || ENC_KEY.length === 0) return null;
+  const parts = String(packed).split('.');
+  if (parts.length !== 3) return null;
+  const [ivB64, tagB64, dataB64] = parts;
+  const iv   = Buffer.from(ivB64,  'base64url');
+  const tag  = Buffer.from(tagB64, 'base64url');
+  const data = Buffer.from(dataB64,'base64url');
+  const d = crypto.createDecipheriv('aes-256-gcm', ENC_KEY, iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(data), d.final()]).toString('utf8');
+};
+
+const tryDecryptAny = (v) => {
+  if (v == null || v === '') return null;
+  const s = String(v);
+  try {
+    if (s.includes('.')) return decryptGCM(s);
+    if (s.includes(':')) return decryptLegacy(s);
+    return s;
+  } catch {
+    return null;
+  }
+};
+
+const deepDecrypt = (v, passes = 3) => {
+  let cur = v;
+  for (let i = 0; i < passes; i++) {
+    const out = tryDecryptAny(cur);
+    if (out == null || out === cur) return out;
+    cur = out;
+  }
+  return cur;
+};
+
+const pick = (obj, keys) => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v != null && v !== '') return v;
+  }
+  return null;
+};
+
+// Giải mã các field nhạy cảm trong user đã populate
+function buildDecryptedUser(userDoc) {
+  if (!userDoc) return null;
+  const u = typeof userDoc.toObject === 'function' ? userDoc.toObject() : { ...userDoc };
+
+  const phoneCipher   = pick(u, ['phoneNumberEnc', 'phoneNumber']);
+  const addrCipher    = pick(u, ['addressEnc', 'address']);
+  const curAddrCipher = pick(u, ['currentAddressEnc', 'currentAddress']);
+
+  const decryptedUser = {
+    ...u,
+    phoneNumber:    deepDecrypt(phoneCipher),
+    address:        deepDecrypt(addrCipher),
+    currentAddress: deepDecrypt(curAddrCipher),
+  };
+
+  // log nhẹ để debug
+  console.log('[SupporterProfileController] decryptedUser address =', decryptedUser.address);
+  console.log('[SupporterProfileController] decryptedUser currentAddress =', decryptedUser.currentAddress);
+
+  // dọn rác các field Enc trước khi trả ra ngoài
+  delete decryptedUser.phoneNumberEnc;
+  delete decryptedUser.addressEnc;
+  delete decryptedUser.currentAddressEnc;
+  delete decryptedUser.phoneNumberHash;
+
+  return decryptedUser;
+}
+
 function toStringSet(arr) {
   return new Set((arr || []).map(String));
 }
+
 /* ------------ Helpers ------------ */
 function validateAndNormalizeSchedule(scheduleInput) {
   if (!Array.isArray(scheduleInput)) return null;
@@ -180,12 +273,20 @@ const SupporterProfileController = {
       delete payload.__invalidSchedule;
 
       const doc = await SupporterProfile.create({ user: userId, ...payload });
-      await doc.populate("user", "fullName avatar phoneNumber role");
+      await doc.populate({
+        path: "user",
+        select:
+          "fullName avatar phoneNumber role currentAddress address currentLocation " +
+          "+phoneNumberEnc +addressEnc +currentAddressEnc",
+      });
+
+      const profileObj = doc.toObject();
+      profileObj.user = buildDecryptedUser(doc.user);
 
       return res.status(201).json({
         success: true,
         message: "Tạo hồ sơ mô tả công việc thành công",
-        data: doc,
+        data: profileObj,
       });
     } catch (err) {
       console.error("Error createMyProfile:", err);
@@ -201,14 +302,21 @@ const SupporterProfileController = {
         return res.status(401).json({ success: false, message: "Chưa đăng nhập" });
       }
 
-      const doc = await SupporterProfile.findOne({ user: userId })
-        .populate("user", "fullName avatar phoneNumber role");
+      const doc = await SupporterProfile.findOne({ user: userId }).populate({
+        path: "user",
+        select:
+          "fullName avatar phoneNumber role currentAddress address currentLocation " +
+          "+phoneNumberEnc +addressEnc +currentAddressEnc",
+      });
 
       if (!doc) {
         return res.status(404).json({ success: false, message: "Bạn chưa có hồ sơ. Hãy tạo hồ sơ trước." });
       }
 
-      return res.status(200).json({ success: true, data: doc });
+      const profileObj = doc.toObject();
+      profileObj.user = buildDecryptedUser(doc.user);
+
+      return res.status(200).json({ success: true, data: profileObj });
     } catch (err) {
       console.error("Error getMyProfile:", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
@@ -218,7 +326,6 @@ const SupporterProfileController = {
   // PATCH /supporter-profiles/me
   updateMyProfile: async (req, res) => {
     try {
-
       const userId = req.user?.userId;
       if (!isValidObjectId(userId)) {
         return res.status(401).json({ success: false, message: "Chưa đăng nhập" });
@@ -274,13 +381,21 @@ const SupporterProfileController = {
           runValidators: true,   // ✅ validator schema
           context: "query",      // ✅ cần cho min/max/enum khi update
         }
-      ).populate("user", "fullName avatar phoneNumber role");
+      ).populate({
+        path: "user",
+        select:
+          "fullName avatar phoneNumber role currentAddress address currentLocation " +
+          "+phoneNumberEnc +addressEnc +currentAddressEnc",
+      });
 
       if (!doc) {
         return res.status(404).json({ success: false, message: "Chưa có hồ sơ để cập nhật. Hãy tạo hồ sơ trước." });
       }
 
-      return res.status(200).json({ success: true, message: "Cập nhật hồ sơ thành công", data: doc });
+      const profileObj = doc.toObject();
+      profileObj.user = buildDecryptedUser(doc.user);
+
+      return res.status(200).json({ success: true, message: "Cập nhật hồ sơ thành công", data: profileObj });
     } catch (err) {
       console.error("Error updateMyProfile:", err);
       return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi cập nhật hồ sơ" });
@@ -291,7 +406,7 @@ const SupporterProfileController = {
     try {
       const { bookingDraft } = req.body;
       console.log(bookingDraft);
-      
+
       if (!bookingDraft?.packageType) {
         return res.status(400).json({ success: false, message: 'Thiếu bookingDraft' });
       }
