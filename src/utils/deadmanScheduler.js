@@ -31,7 +31,6 @@ async function sweepOnce() {
     const lastCheckin = st.lastCheckinAt ? moment(st.lastCheckinAt).tz(tz) : null;
     const snoozeUntil = st.snoozeUntil ? moment(st.snoozeUntil).tz(tz) : null;
     const lastRemAt = st.lastReminderAt ? moment(st.lastReminderAt).tz(tz) : null;
-    const lastAlAt = st.lastAlertAt ? moment(st.lastAlertAt).tz(tz) : null;
 
     // 🆕 Trạng thái đếm alert & auto SOS trong ngày
     const alertCountTodayRaw = Number(st.alertCountToday || 0);
@@ -61,7 +60,7 @@ async function sweepOnce() {
     for (const hhmm of WINDOWS) {
       const [hh, mm] = hhmm.split(':').map(n => Number(n) || 0);
 
-      // Mốc bắt đầu cửa sổ
+      // Mốc bắt đầu cửa sổ (trong NGÀY hôm nay)
       const windowStart = nowTZ
         .clone()
         .hour(hh)
@@ -73,13 +72,10 @@ async function sweepOnce() {
       const remindAt = windowStart.clone().subtract(5, 'minutes');
       const firstAlertAt = windowStart.clone().add(10, 'minutes');
 
-      // 🆕 Lặp ALERT mỗi 1 phút (cho bạn test)
+      // Lặp ALERT mỗi 1 phút
       const repeatGapMins = 1;
 
-      lg(reqId, '--- window ---', {
-        window: hhmm,
-        windowStart: windowStart.format(),
-      });
+      lg(reqId, '--- window ---', { window: hhmm, windowStart: windowStart.format() });
 
       // 1) Nếu đã check-in sau thời điểm bắt đầu cửa sổ → bỏ qua cửa sổ này
       if (lastCheckin && lastCheckin.isSameOrAfter(windowStart)) {
@@ -89,7 +85,7 @@ async function sweepOnce() {
 
       // 2) Khoảng nhắc (-5' → 0'): gửi REMINDER (mỗi cửa sổ chỉ 1 lần)
       if (nowTZ.isSameOrAfter(remindAt) && nowTZ.isBefore(windowStart)) {
-        const needRemind = !lastRemAt || lastRemAt.isBefore(windowStart);
+        const needRemind = !lastRemAt || moment(st.lastReminderAt).tz(tz).isBefore(windowStart);
         if (needRemind) {
           lg(reqId, 'ACTION reminder -> _remindElder (pre-5m)');
           try {
@@ -121,14 +117,24 @@ async function sweepOnce() {
         let alertCountToday = alertCountTodayRaw;
 
         const lastIsValid =
-          !!(lastAlertAtRaw && typeof lastAlertAtRaw.isValid === 'function' && lastAlertAtRaw.isValid());
-        const sameDay = lastIsValid && lastAlertAtRaw.isSame(nowTZ, 'day');
+          lastAlertAtRaw && lastAlertAtRaw.isValid && lastAlertAtRaw.isValid();
 
-        // Nếu chưa có alert trong NGÀY hiện tại → reset về 0
-        if (!sameDay) {
+        // 🆕🆕 SỬA LOGIC RESET: reset THEO KHUNG GIỜ, KHÔNG PHẢI THEO NGÀY
+        // - Nếu lastAlertAt không cùng ngày HOẶC trước firstAlertAt của khung giờ hiện tại
+        //   → coi như sang "cửa sổ mới", reset về 0.
+        let inSameWindow = false;
+        if (lastIsValid) {
+          inSameWindow =
+            lastAlertAtRaw.isSame(nowTZ, 'day') &&
+            lastAlertAtRaw.isSameOrAfter(firstAlertAt);
+        }
+
+        if (!inSameWindow) {
           console.log(
-            '[Deadman][count] reset alertCountToday vì sang ngày mới hoặc lastAlertAt invalid',
+            '[Deadman][count] reset alertCountToday vì sang khung giờ mới hoặc lastAlertAt invalid',
             {
+              window: hhmm,
+              firstAlertAt: firstAlertAt.format(),
               prevAlertCountToday: alertCountTodayRaw,
               lastAlertAt: st.lastAlertAt,
             },
@@ -136,42 +142,37 @@ async function sweepOnce() {
           alertCountToday = 0;
         }
 
+        // Khoảng cách tối thiểu giữa 2 alert (phút)
+        const repeatGapMinsInner = 1;
+
         // Quyết định có gửi thêm alert hay chưa:
         let shouldSend = false;
         let nextAlertDueLog = null;
 
-        if (!lastIsValid) {
-          // Chưa từng alert bao giờ hoặc lastAlertAt invalid → gửi ngay lần đầu
+        if (!lastIsValid || !inSameWindow) {
+          // Chưa từng alert trong KHUNG GIỜ NÀY → gửi ngay lần đầu
           shouldSend = true;
           nextAlertDueLog = firstAlertAt.format();
         } else {
           const diffMins = nowTZ.diff(lastAlertAtRaw, 'minutes');
-          shouldSend = diffMins >= repeatGapMins;
+          shouldSend = diffMins >= repeatGapMinsInner;
           nextAlertDueLog = lastAlertAtRaw
             .clone()
-            .add(repeatGapMins, 'minutes')
+            .add(repeatGapMinsInner, 'minutes')
             .format();
 
           console.log('[Deadman][count] diffMins since lastAlertAt =', diffMins, {
+            window: hhmm,
             lastAlertAt: lastAlertAtRaw.format(),
             now: nowTZ.format(),
           });
         }
 
         if (shouldSend) {
-          // Tăng số lần alert trong NGÀY
+          // Tăng số lần alert TRONG KHUNG GIỜ HIỆN TẠI
           alertCountToday += 1;
 
-          // 🔥 CHỈ LẦN THỨ 3 MỚI AUTO SOS
-          const shouldTriggerAutoSOS = alertCountToday === 3;
-
-          console.log('[Deadman][logic]', {
-            alertCountToday,
-            autoSosTriggeredAt: autoSosTriggeredAt
-              ? autoSosTriggeredAt.format?.()
-              : null,
-            shouldTriggerAutoSOS,
-          });
+          const shouldTriggerAutoSOS = alertCountToday === 3; // ✅ Lần thứ 3 trong KHUNG GIỜ nào cũng auto SOS
 
           lg(reqId, 'ACTION alert -> _alertRelatives (every 1 minute)', {
             window: hhmm,
@@ -185,16 +186,11 @@ async function sweepOnce() {
               'safetyMonitoring.deadmanState.alertCountToday': alertCountToday,
             };
 
-            // Lưu lại thời điểm autoSOS (tuỳ bạn dùng để thống kê)
             if (shouldTriggerAutoSOS) {
-              setObj['safetyMonitoring.deadmanState.autoSosTriggeredAt'] =
-                new Date();
+              setObj['safetyMonitoring.deadmanState.autoSosTriggeredAt'] = new Date();
             }
 
-            await ElderlyProfile.updateOne(
-              { user: prof.user },
-              { $set: setObj },
-            );
+            await ElderlyProfile.updateOne({ user: prof.user }, { $set: setObj });
 
             const DeadmanController = require('../app/controllers/deadmanController');
             if (typeof DeadmanController._alertRelatives === 'function') {
@@ -213,9 +209,7 @@ async function sweepOnce() {
             console.error('[Deadman] alert error', e);
           }
         } else {
-          lg(reqId, 'WAIT until next 1m alert tick', {
-            nextAlertDue: nextAlertDueLog,
-          });
+          lg(reqId, 'WAIT until next 1m alert tick', { nextAlertDue: nextAlertDueLog });
         }
 
         continue; // qua cửa sổ tiếp theo
@@ -243,7 +237,7 @@ function startDeadmanScheduler() {
   // chạy ngay 1 vòng để thấy log tức thì
   sweepOnce().catch(e => console.error('[Deadman] Sweep error (initial)', e));
 
-  // 🆕 Tick mỗi 1 phút để test alert & auto SOS
+  // Tick mỗi 1 phút để test alert & auto SOS
   setInterval(() => {
     sweepOnce().catch(e => console.error('[Deadman] Sweep error', e));
   }, 60 * 1000); // 1 phút
