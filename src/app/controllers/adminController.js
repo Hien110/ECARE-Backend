@@ -865,16 +865,21 @@ const AdminController = {
         errors: [],
         total: data.length
       };
+
+      // Xử lý từng dòng dữ liệu
       for (let i = 0; i < data.length; i++) {
 
         const row = data[i];
-        const rowNumber = i + 2; 
+        const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
         try {
+          // Loại bỏ ký tự nháy đơn ở đầu các trường có thể bị lỗi từ Excel
           const cleanField = v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v;
           row.phoneNumber = cleanField(row.phoneNumber);
           row.password = cleanField(row.password);
           row.dateOfBirth = cleanField(row.dateOfBirth);
           row.identityCard = cleanField(row.identityCard);
+
+          // Validate dữ liệu
           const validation = validateSupporterRow(row, rowNumber);
           if (!validation.isValid) {
             results.errors.push({
@@ -885,6 +890,7 @@ const AdminController = {
             continue;
           }
 
+          // Chuẩn hóa số điện thoại
           const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
           if (!normalizedPhone) {
             results.errors.push({
