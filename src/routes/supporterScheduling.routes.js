@@ -7,6 +7,7 @@ const { authorize, checkUserStatus } = require('../app/middlewares/authorize');
 // router.use(authenticateToken);
 // Tạo lịch hỗ trợ mới
 router.use(authenticateToken);
+router.get('/supporter-detail/:id',supporterSchedulingController.getSupporterDetail);
 router.post('/', supporterSchedulingController.createScheduling);
 
 // Lấy danh sách đặt lịch theo id

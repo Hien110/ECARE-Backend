@@ -1,5 +1,5 @@
-
 const mongoose = require('mongoose');
+const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
 const SupporterScheduling = require("../models/SupporterScheduling");
@@ -868,10 +868,17 @@ const AdminController = {
 
       // Xử lý từng dòng dữ liệu
       for (let i = 0; i < data.length; i++) {
+
         const row = data[i];
         const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
-
         try {
+          // Loại bỏ ký tự nháy đơn ở đầu các trường có thể bị lỗi từ Excel
+          const cleanField = v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v;
+          row.phoneNumber = cleanField(row.phoneNumber);
+          row.password = cleanField(row.password);
+          row.dateOfBirth = cleanField(row.dateOfBirth);
+          row.identityCard = cleanField(row.identityCard);
+
           // Validate dữ liệu
           const validation = validateSupporterRow(row, rowNumber);
           if (!validation.isValid) {
@@ -883,18 +890,27 @@ const AdminController = {
             continue;
           }
 
-          // Kiểm tra số điện thoại đã tồn tại
+          // Chuẩn hóa số điện thoại
           const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
-          const localPhone = normalizedPhone?.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
-          const phoneHashesToCheck = normalizedPhone ? [...new Set([
+          if (!normalizedPhone) {
+            results.errors.push({
+              row: rowNumber,
+              errors: ["Số điện thoại không hợp lệ"],
+              data: row
+            });
+            continue;
+          }
+          const localPhone = normalizedPhone.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
+          const phoneHashesToCheck = [...new Set([
             hmacIndex(normalizedPhone),
             localPhone ? hmacIndex(localPhone) : null
-          ].filter(Boolean))] : [];
-          const existingUser = normalizedPhone ? await User.findOne({
+          ].filter(Boolean))];
+
+          // Kiểm tra trùng số điện thoại
+          const existingUser = await User.findOne({
             isActive: true,
             phoneNumberHash: { $in: phoneHashesToCheck }
-          }) : null;
-          
+          });
           if (existingUser) {
             results.errors.push({
               row: rowNumber,
@@ -904,50 +920,68 @@ const AdminController = {
             continue;
           }
 
-          // Tạo user data
+          // Kiểm tra email nếu có
+          let emailNorm = null;
+          if (row.email?.trim()) {
+            emailNorm = row.email.trim().toLowerCase();
+            const emailHash = hmacIndex(emailNorm);
+            const existingEmail = await User.findOne({ emailHash, isActive: true });
+            if (existingEmail) {
+              results.errors.push({
+                row: rowNumber,
+                errors: ["Email đã được sử dụng"],
+                data: row
+              });
+              continue;
+            }
+          }
+
+          // Kiểm tra identityCard nếu có
+          let identityCardStr = null;
+          let identityCardHash = null;
+          if (row.identityCard != null && String(row.identityCard).trim()) {
+            identityCardStr = String(row.identityCard).trim();
+            identityCardHash = hmacIndex(identityCardStr);
+            const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
+            if (existingIdentityCard) {
+              results.errors.push({
+                row: rowNumber,
+                errors: ["CMND/CCCD đã được sử dụng"],
+                data: row
+              });
+              continue;
+            }
+          }
+
+          // Hash password
           const hashedPassword = await bcrypt.hash(String(row.password), 12);
           const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
-          
 
-          const userData = {
-            fullName: row.fullName.trim(),
-            gender: row.gender.toLowerCase(),
-            password: hashedPassword,
-            role: "supporter",
-            isActive: true,
-            dateOfBirth: parsedDateOfBirth,
-            phoneNumber: normalizedPhone
-          };
+          // Tạo user qua setter để plugin hoạt động
+          const user = new User();
+          user.fullName = row.fullName.trim();
+          user.gender = row.gender.toLowerCase();
+          user.password = hashedPassword;
+          user.role = "supporter";
+          user.isActive = true;
+          user.dateOfBirth = parsedDateOfBirth;
+          user.phoneNumber = normalizedPhone; // setter sẽ mã hóa và sinh hash
+          if (emailNorm) user.email = emailNorm;
+          if (row.address?.trim()) user.address = row.address.trim();
+          if (identityCardStr) user.identityCard = identityCardStr;
 
-          // Mã hóa dữ liệu
-          if (row.email?.trim()) {
-            const emailNorm = row.email.trim().toLowerCase();
-            userData.email = emailNorm;
-            userData.emailHash = hmacIndex(emailNorm);
-          }
-          if (row.address?.trim()) {
-            userData.address = row.address.trim();
-          }
-          // Thêm identityCard và identityCardHash nếu có
-          if (row.identityCard != null && String(row.identityCard).trim()) {
-            const identityCardStr = String(row.identityCard).trim();
-            userData.identityCard = identityCardStr;
-            userData.identityCardHash = hmacIndex(identityCardStr);
-          }
-
-          // Tạo user
-          const newUser = await User.create(userData);
+          await user.save();
 
           // Tạo supporter profile
           await SupporterProfile.create({
-            user: newUser._id,
+            user: user._id,
             sessionFee: { morning: 0, afternoon: 0, evening: 0 }
           });
 
           results.success.push({
             row: rowNumber,
-            userId: newUser._id,
-            fullName: newUser.fullName,
+            userId: user._id,
+            fullName: user.fullName,
             phoneNumber: normalizedPhone
           });
 
@@ -994,11 +1028,17 @@ const AdminController = {
         total: data.length
       };
 
-      // Xử lý từng dòng dữ liệu
       for (let i = 0; i < data.length; i++) {
         const row = data[i];
-        const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
+        const rowNumber = i + 2;
         try {
+          // Loại bỏ ký tự nháy đơn ở đầu các trường có thể bị lỗi từ Excel
+          const cleanField = v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v;
+          row.phoneNumber = cleanField(row.phoneNumber);
+          row.password = cleanField(row.password);
+          row.dateOfBirth = cleanField(row.dateOfBirth);
+          row.identityCard = cleanField(row.identityCard);
+
           // Validate dữ liệu
           const validation = validateDoctorRow(row, rowNumber);
           if (!validation.isValid) {
@@ -1010,18 +1050,27 @@ const AdminController = {
             continue;
           }
 
-          // Kiểm tra số điện thoại đã tồn tại
+          // Chuẩn hóa số điện thoại
           const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
-          const localPhone = normalizedPhone?.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
-          const phoneHashesToCheck = normalizedPhone ? [...new Set([
+          if (!normalizedPhone) {
+            results.errors.push({
+              row: rowNumber,
+              errors: ["Số điện thoại không hợp lệ"],
+              data: row
+            });
+            continue;
+          }
+          const localPhone = normalizedPhone.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
+          const phoneHashesToCheck = [...new Set([
             hmacIndex(normalizedPhone),
             localPhone ? hmacIndex(localPhone) : null
-          ].filter(Boolean))] : [];
-          const existingUser = normalizedPhone ? await User.findOne({
+          ].filter(Boolean))];
+
+          // Kiểm tra trùng số điện thoại
+          const existingUser = await User.findOne({
             isActive: true,
             phoneNumberHash: { $in: phoneHashesToCheck }
-          }) : null;
-          
+          });
           if (existingUser) {
             results.errors.push({
               row: rowNumber,
@@ -1031,9 +1080,10 @@ const AdminController = {
             continue;
           }
 
-          // Kiểm tra email đã tồn tại
+          // Kiểm tra email nếu có
+          let emailNorm = null;
           if (row.email?.trim()) {
-            const emailNorm = row.email.trim().toLowerCase();
+            emailNorm = row.email.trim().toLowerCase();
             const emailHash = hmacIndex(emailNorm);
             const existingEmail = await User.findOne({ emailHash, isActive: true });
             if (existingEmail) {
@@ -1046,47 +1096,49 @@ const AdminController = {
             }
           }
 
-          // Tạo user data
+          // Kiểm tra identityCard nếu có
+          let identityCardStr = null;
+          let identityCardHash = null;
+          if (row.identityCard != null && String(row.identityCard).trim()) {
+            identityCardStr = String(row.identityCard).trim();
+            identityCardHash = hmacIndex(identityCardStr);
+            const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
+            if (existingIdentityCard) {
+              results.errors.push({
+                row: rowNumber,
+                errors: ["CMND/CCCD đã được sử dụng"],
+                data: row
+              });
+              continue;
+            }
+          }
+
+          // Hash password
           const hashedPassword = await bcrypt.hash(String(row.password), 12);
           const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
-          
 
-          const userData = {
-            fullName: row.fullName.trim(),
-            gender: row.gender.toLowerCase(),
-            password: hashedPassword,
-            role: "doctor",
-            isActive: true,
-            dateOfBirth: parsedDateOfBirth,
-            phoneNumber: normalizedPhone
-          };
+          // Tạo user qua setter để plugin hoạt động
+          const user = new User();
+          user.fullName = row.fullName.trim();
+          user.gender = row.gender.toLowerCase();
+          user.password = hashedPassword;
+          user.role = "doctor";
+          user.isActive = true;
+          user.dateOfBirth = parsedDateOfBirth;
+          user.phoneNumber = normalizedPhone; // setter sẽ mã hóa và sinh hash
+          if (emailNorm) user.email = emailNorm;
+          if (row.address?.trim()) user.address = row.address.trim();
+          if (identityCardStr) user.identityCard = identityCardStr;
 
-          if (row.email?.trim()) {
-            const emailNorm = row.email.trim().toLowerCase();
-            userData.email = emailNorm;
-            userData.emailHash = hmacIndex(emailNorm);
-          }
-          if (row.address?.trim()) {
-            userData.address = row.address.trim();
-          }
-          // Thêm identityCard và identityCardHash nếu có
-          if (row.identityCard?.toString().trim()) {
-            userData.identityCard = row.identityCard.toString().trim();
-            userData.identityCardHash = hmacIndex(row.identityCard.toString().trim());
-          }
-
-          // Tạo user
-          const newUser = await User.create(userData);
+          await user.save();
 
           results.success.push({
             row: rowNumber,
-            userId: newUser._id,
-            fullName: newUser.fullName,
+            userId: user._id,
+            fullName: user.fullName,
             phoneNumber: normalizedPhone,
-            email: row.email
+            email: emailNorm
           });
-
-
         } catch (err) {
           console.error(`❌ [AdminController.bulkImportDoctors] Error at row ${rowNumber}:`, err);
           results.errors.push({
@@ -1101,7 +1153,6 @@ const AdminController = {
         message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
         data: results
       });
-
     } catch (err) {
       return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
     }
