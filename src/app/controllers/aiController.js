@@ -260,8 +260,8 @@ const AiController = {
           "code phức tạp",
         ];
         return heavy.some((k) => q.includes(k))
-          ? "llama-3.1-70b-versatile"
-          : process.env.AI_MODEL || "llama-3.1-8b-instant";
+          ? process.env.AI_MODEL
+          : "llama-3.1-70b-versatile" || "llama-3.1-8b-instant";
       }
 
       function parseDoctorIntent(message) {
