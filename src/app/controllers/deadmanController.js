@@ -15,16 +15,11 @@ try {
     startDeadmanScheduler();
     __deadmanSchedulerStarted = true;
   }
-} catch (e) {
-  console.warn("[Deadman] Scheduler not started:", e?.message || e);
-}
+} catch (e) {}
 
 const DeadmanController = {
   status: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][status][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -42,7 +37,6 @@ const DeadmanController = {
         data: prof?.safetyMonitoring || {},
       });
     } catch (err) {
-      console.error("[DEADMAN][status][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: err?.message || "Lỗi lấy trạng thái Deadman",
@@ -51,10 +45,7 @@ const DeadmanController = {
   },
 
   config: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][config][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -90,7 +81,6 @@ const DeadmanController = {
         data: updated?.safetyMonitoring?.deadmanConfig || {},
       });
     } catch (err) {
-      console.error("[DEADMAN][config][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể cập nhật cấu hình Deadman",
@@ -99,10 +89,7 @@ const DeadmanController = {
   },
 
   checkin: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][checkin][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -166,7 +153,6 @@ const DeadmanController = {
         },
       });
     } catch (err) {
-      console.error("[DEADMAN][checkin][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể thực hiện check-in (Lỗi server).",
@@ -175,10 +161,7 @@ const DeadmanController = {
   },
 
   snooze: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][snooze][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -198,7 +181,6 @@ const DeadmanController = {
       
       return res.json({ success: true, data: { snoozeUntil: until } });
     } catch (err) {
-      console.error("[DEADMAN][snooze][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể đặt snooze",
@@ -208,10 +190,7 @@ const DeadmanController = {
 
   // ====== LỰA CHỌN HÔM NAY (safe / phys_unwell / psy_unwell) ======
   choiceNotify: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][choiceNotify][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -240,9 +219,8 @@ const DeadmanController = {
         });
       }
       const choice = rawChoice;
-      const customMessage = typeof req.body?.message === "string"
-        ? req.body.message.trim()
-        : "";
+      const customMessage =
+        typeof req.body?.message === "string" ? req.body.message.trim() : "";
 
       // 1) bảo đảm có ElderlyProfile
       let prof = await ElderlyProfile.findOne({ user: elderId }).lean();
@@ -253,10 +231,6 @@ const DeadmanController = {
           prof = created?.toObject?.() || created;
           
         } catch (e) {
-          console.error(
-            "[DEADMAN][choiceNotify][createProfile][ERROR]:",
-            e?.message || e
-          );
           return res.status(500).json({
             success: false,
             message: "Không thể tạo hồ sơ ElderlyProfile cho người dùng.",
@@ -279,29 +253,28 @@ const DeadmanController = {
       
 
       // 3) message theo choice
-      const msgMap = {
-        safe: {
-          title: "✅ Hôm nay an toàn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: sức khỏe & tâm trạng đều tốt.",
-          severity: "info",
-        },
-        phys_unwell: {
-          title: "⚕️ Sức khỏe không ổn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: KHÔNG ỔN về SỨC KHỎE.",
-          severity: "high", // dùng high để ưu tiên
-        },
-        psy_unwell: {
-          title: "💭 Tâm lý không ổn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: KHÔNG ỔN về TÂM LÝ.",
-          severity: "medium",
-        },
-      }[choice];
+      const msgMap =
+        {
+          safe: {
+            title: "✅ Hôm nay an toàn",
+            body:
+              customMessage ||
+              "Người cao tuổi báo: sức khỏe & tâm trạng đều tốt.",
+            severity: "info",
+          },
+          phys_unwell: {
+            title: "⚕️ Sức khỏe không ổn",
+            body:
+              customMessage || "Người cao tuổi báo: KHÔNG ỔN về SỨC KHỎE.",
+            severity: "high", // dùng high để ưu tiên
+          },
+          psy_unwell: {
+            title: "💭 Tâm lý không ổn",
+            body:
+              customMessage || "Người cao tuổi báo: KHÔNG ỔN về TÂM LÝ.",
+            severity: "medium",
+          },
+        }[choice];
 
       // 4) lấy tên elder để đính kèm
       const elderUser = await User.findById(elderId).select("fullName");
@@ -346,7 +319,6 @@ const DeadmanController = {
 
       // 7) gửi push (nếu có token)
       if (families.length > 0) {
-        
         const pushResult = await trySendPush({
           recipients: families,
           title: msgMap.title,
@@ -370,7 +342,6 @@ const DeadmanController = {
         data: { lastCheckinAt: now, choice },
       });
     } catch (err) {
-      console.error("[DEADMAN][choiceNotify][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể xử lý lựa chọn hôm nay.",
@@ -391,18 +362,11 @@ const DeadmanController = {
         body: "Bạn chưa xác nhận “Tôi ổn hôm nay”. Vui lòng bấm để xác nhận.",
         data: { type: "deadman_reminder", action: "checkin" },
       });
-
-      
-    } catch (err) {
-      console.error("[DEADMAN][_remindElder][ERROR]:", err?.message || err);
-    }
+    } catch (err) {}
   },
 
   _alertRelatives: async (elderUserId, options = {}) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][_alertRelatives][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const alertCountToday = options?.alertCountToday ?? null;
@@ -477,8 +441,7 @@ const DeadmanController = {
           log("⚠️ Không tìm thấy device của người cao tuổi để gửi autoSOS");
         }
 
-        
-        return; // Kết thúc nhánh autoSOS
+        return;
       }
 
       // ==============================
@@ -506,11 +469,7 @@ const DeadmanController = {
       } else {
         
       }
-
-      
-    } catch (err) {
-      console.error("[DEADMAN][_alertRelatives][ERROR]:", err?.message || err);
-    }
+    } catch (err) {}
   },
 };
 
