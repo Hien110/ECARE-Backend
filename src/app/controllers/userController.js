@@ -283,7 +283,7 @@ const UserController = {
       if (!tempStr) {
         return res.status(404).json({
           success: false,
-          message: "Session laf con cho Binh",
+          message: "Session đăng ký tạm thời không tồn tại hoặc đã hết hạn",
         });
       }
       const temp = JSON.parse(tempStr);
@@ -394,7 +394,7 @@ const UserController = {
       if (!dataStr)
         return res
           .status(404)
-          .json({ success: false, message: "Session hết hạn" });
+          .json({ success: false, message: "Session đăng ký tạm thời không tồn tại hoặc đã hết hạn" });
 
       const temp = JSON.parse(dataStr);
       if (!temp.otpVerified)
@@ -1287,7 +1287,7 @@ const UserController = {
         return res
           .status(400)
           .json({ success: false, message: "Thiếu số điện thoại" });
-      const norm = normalizeVNPhone(phoneNumber);
+      const norm = normalizePhoneVN(phoneNumber);
       const phoneHash = hmacIndex(norm);
       const key = `tempRegister:${phoneHash}`;
       const dataStr = await redis.get(key);

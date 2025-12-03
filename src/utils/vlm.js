@@ -673,14 +673,38 @@ async function extractCccdFieldsWithGemini({
       const code = err?.response?.status;
       const detail = err?.response?.data || err.message;
       attempts.push({ code, detail });
-      if (code === 429 || code === 403) continue; // quota -> xoay key
-      break; // lỗi khác: dừng luôn
+      // Ghi log chi tiết để theo dõi trên server
+      console.error('[Gemini OCR] attempt failed', { idx: i, code, detail });
+      // 429 quota hoặc 403 bị cấm: xoay key tiếp
+      if (code === 429 || code === 403) continue;
+      // 401: key không hợp lệ hoặc không bật API
+      if (code === 401) break;
+      // Lỗi khác: dừng luôn
+      break;
     }
+  }
+
+  // Phân loại thông điệp rõ ràng hơn theo mã lỗi đã gặp
+  const codes = attempts
+    .map((a) => (typeof a === 'string' ? null : a.code))
+    .filter((c) => c != null);
+  const lastCode = codes.length ? codes[codes.length - 1] : null;
+
+  let message = "Gọi Gemini thất bại hoặc hết lượt tất cả API key.";
+  if (attempts.includes('no_key')) {
+    message = "Không tìm thấy API key hợp lệ trên server.";
+  }
+  if (lastCode === 401) {
+    message = "API key không hợp lệ hoặc dịch vụ Gemini chưa được bật.";
+  } else if (lastCode === 403) {
+    message = "API key bị hạn chế (domain/app) hoặc bị từ chối truy cập.";
+  } else if (lastCode === 429) {
+    message = "Hết hạn mức (quota) cho API key hiện tại.";
   }
 
   return {
     success: false,
-    message: "Gọi Gemini thất bại hoặc hết lượt tất cả API key.",
+    message,
     attempts,
   };
 }
