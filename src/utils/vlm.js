@@ -672,9 +672,25 @@ async function extractCccdFieldsWithGemini({
     } catch (err) {
       const code = err?.response?.status;
       const detail = err?.response?.data || err.message;
+      const message = err?.message || (typeof detail === 'string' ? detail : undefined);
       attempts.push({ code, detail });
-      // Ghi log chi tiết để theo dõi trên server
-      console.error('[Gemini OCR] attempt failed', { idx: i, code, detail });
+      // Phân biệt lý do theo mã lỗi để dễ debug
+      let reason;
+      switch (code) {
+        case 401:
+          reason = 'unauthorized_or_api_disabled';
+          break;
+        case 403:
+          reason = 'forbidden_key_restriction_or_access_denied';
+          break;
+        case 429:
+          reason = 'quota_exceeded_rate_limited';
+          break;
+        default:
+          reason = 'other_error';
+      }
+      // Ghi log chi tiết để theo dõi trên server (thêm trường message & reason)
+      console.error('[Gemini OCR] attempt failed', { idx: i, code, reason, message, detail });
       // 429 quota hoặc 403 bị cấm: xoay key tiếp
       if (code === 429 || code === 403) continue;
       // 401: key không hợp lệ hoặc không bật API
