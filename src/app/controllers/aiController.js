@@ -1,4 +1,5 @@
-const { getGroqClient } = require("../../utils/groqClient.js");
+// controllers/AiController.js
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { synthesizeToBuffer } = require("../../utils/tts.js");
 const DoctorProfile = require("../models/DoctorProfile.js");
 const SupporterProfile = require("../models/SupporterProfile.js");
@@ -22,11 +23,36 @@ try {
   );
 }
 
+// Lấy key Gemini từ .env
+const GEMINI_API_KEY = process.env.GEMINI_KEY_1;
+const GEMINI_DEFAULT_MODEL =
+  process.env.GEMINI_MODEL || "gemini-2.0-flash";
+
+/**
+ * Helper: tạo client Gemini
+ */
+function getGeminiClient() {
+  if (!GEMINI_API_KEY) {
+    throw new Error("Gemini API key (GEMINI_KEY_1) chưa được cấu hình");
+  }
+  return new GoogleGenerativeAI(GEMINI_API_KEY);
+}
+
 const AiController = {
   chat: async (req, res) => {
     const DEBUG = process.env.NODE_ENV !== "production";
     const reqId = Math.random().toString(36).slice(2);
     const startedAt = Date.now();
+
+    if (!GEMINI_API_KEY) {
+      if (DEBUG) {
+        console.error("[AI] Missing GEMINI_KEY_1 in environment");
+      }
+      return res.status(500).json({
+        success: false,
+        message: "Gemini chưa được cấu hình trên server",
+      });
+    }
 
     try {
       const VI_STOPWORDS = new Set([
@@ -101,7 +127,7 @@ const AiController = {
         return out;
       }
 
-      function toGroqMessages(
+      function toChatMessages(
         history,
         systemInstruction,
         injectedContext,
@@ -251,17 +277,9 @@ const AiController = {
       }
 
       function chooseModel(message) {
-        const q = (message || "").toLowerCase();
-        const heavy = [
-          "chẩn đoán",
-          "giải thích sâu",
-          "phân tích chuyên sâu",
-          "toán",
-          "code phức tạp",
-        ];
-        return heavy.some((k) => q.includes(k))
-          ? process.env.AI_MODEL
-          : "llama-3.1-70b-versatile" || "llama-3.1-8b-instant";
+        // Với Gemini: dùng 1 model chính, có thể override bằng env
+        return GEMINI_DEFAULT_MODEL;
+
       }
 
       function parseDoctorIntent(message) {
@@ -355,7 +373,6 @@ const AiController = {
             role,
             fcmTokens: u.fcmTokens || [],
             pushTokens: u.pushTokens || [],
-            // LẤY NGUYÊN VĂN QUAN HỆ TỪ DB (không chuẩn hoá)
             relationText:
               r?.relation ??
               r?.relationship ??
@@ -368,45 +385,67 @@ const AiController = {
         return [...map.values()];
       }
 
-      async function groqWithTimeout(p, timeoutMs = 25000) {
+      // Timeout wrapper (tên cũ groqWithTimeout nhưng dùng chung)
+      async function withTimeout(promise, timeoutMs = 25000) {
         let t;
         const timeout = new Promise((_, rej) => {
           t = setTimeout(() => rej(new Error("AbortError")), timeoutMs);
         });
-        const r = await Promise.race([p, timeout]);
+        const r = await Promise.race([promise, timeout]);
         clearTimeout(t);
         return r;
       }
+
+      /**
+       * Gọi Gemini với retry + fallback model
+       */
       async function fetchWithRetryAndFallback({
-        ai,
         primaryModel,
         messages,
         generationConfig,
         maxRetries = 3,
         timeoutMs = 25000,
       }) {
+        const baseModel = primaryModel || GEMINI_DEFAULT_MODEL;
         const models = [
-          primaryModel,
-          "llama-3.1-8b-instant",
-          "gemma2-9b-it",
-          "llama-3.1-70b-versatile",
-        ];
+          baseModel,
+          "gemini-2.0-flash-lite",
+        ].filter(Boolean);
+
         let lastErr;
         for (let mIdx = 0; mIdx < models.length; mIdx++) {
           const model = models[mIdx];
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-              const resp = await groqWithTimeout(
-                ai.chat.completions.create({
-                  model,
-                  messages,
-                  temperature: generationConfig?.temperature ?? 0.6,
-                  top_p: generationConfig?.topP ?? 0.8,
-                  max_tokens: generationConfig?.maxOutputTokens ?? 700,
+              const genAI = getGeminiClient();
+              const modelInstance = genAI.getGenerativeModel({
+                model,
+              });
+
+              const contents = messages.map((m) => ({
+                role: m.role === "assistant" ? "model" : "user",
+                parts: [{ text: String(m.content || "") }],
+              }));
+
+              const resp = await withTimeout(
+                modelInstance.generateContent({
+                  contents,
+                  generationConfig: {
+                    temperature: generationConfig?.temperature ?? 0.6,
+                    topP: generationConfig?.topP ?? 0.8,
+                    maxOutputTokens:
+                      generationConfig?.maxOutputTokens ?? 700,
+                  },
                 }),
                 timeoutMs
               );
-              return { response: resp, modelUsed: model };
+
+              const text =
+                resp?.response?.candidates?.[0]?.content?.parts
+                  ?.map((p) => p.text || "")
+                  .join("") || "";
+
+              return { text, modelUsed: model };
             } catch (err) {
               const code = getStatusCodeFromError(err);
               const retriable =
@@ -616,22 +655,20 @@ const AiController = {
         '{ "mood":"warm","valence":0.7,"arousal":0.4,"loneliness":0.1,"riskLevel":"none","riskReason":"","dangerSignals":[],"supportMessage":"","followUps":[] }\n' +
         "```\n";
 
-      const ai = await getGroqClient();
       const primaryModel = chooseModel(message);
       const generationConfig = {
         temperature: 0.6,
         topP: 0.8,
         maxOutputTokens: 1024,
       };
-      const messages = toGroqMessages(
+      const messages = toChatMessages(
         effectiveHistory,
         SYSTEM,
         injectedContext,
         userPrompt
       );
 
-      const { response, modelUsed } = await fetchWithRetryAndFallback({
-        ai,
+      const { text, modelUsed } = await fetchWithRetryAndFallback({
         primaryModel,
         messages,
         generationConfig,
@@ -639,7 +676,6 @@ const AiController = {
         timeoutMs: 25000,
       });
 
-      const text = response?.choices?.[0]?.message?.content ?? "";
       const { reply, emotion } = extractEmotion(text);
 
       const cleanReply = enforceHonorifics(deProgramify(reply));
@@ -1053,6 +1089,7 @@ const AiController = {
           : {}),
       });
     } catch (err) {
+      console.error("[AI][chat] ERROR:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể xử lý chat AI",
@@ -1207,12 +1244,10 @@ const AiController = {
       });
 
       if (code === 11000) {
-        return res
-          .status(409)
-          .json({
-            success: true,
-            data: { sessionId: req?.body?.sessionId, existed: true },
-          });
+        return res.status(409).json({
+          success: true,
+          data: { sessionId: req?.body?.sessionId, existed: true },
+        });
       }
       return res
         .status(500)
@@ -1231,17 +1266,14 @@ const AiController = {
       await AIMessage.deleteMany({ elder: elderId, sessionId });
       return res.json({ success: true });
     } catch (e) {
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: e?.message || "Không xoá được phiên",
-        });
+      return res.status(500).json({
+        success: false,
+        message: e?.message || "Không xoá được phiên",
+      });
     }
   },
 
   // =============== TTS API ===============
-  // AiController.textToSpeech
   textToSpeech: async (req, res) => {
     try {
       const { text, lang = "vi" } = req.body || {};
