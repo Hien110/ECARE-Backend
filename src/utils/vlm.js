@@ -672,9 +672,10 @@ async function extractCccdFieldsWithGemini({
     } catch (err) {
       const code = err?.response?.status;
       const detail = err?.response?.data || err.message;
+      const message = err?.message || (typeof detail === 'string' ? detail : undefined);
       attempts.push({ code, detail });
-      // Ghi log chi tiết để theo dõi trên server
-      console.error('[Gemini OCR] attempt failed', { idx: i, code, detail });
+      // Ghi log chi tiết để theo dõi trên server (thêm trường message để dễ debug)
+      console.error('[Gemini OCR] attempt failed', { idx: i, code, message, detail });
       // 429 quota hoặc 403 bị cấm: xoay key tiếp
       if (code === 429 || code === 403) continue;
       // 401: key không hợp lệ hoặc không bật API

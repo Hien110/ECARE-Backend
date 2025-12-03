@@ -14,7 +14,6 @@ try {
   if (!__deadmanSchedulerStarted && typeof startDeadmanScheduler === "function") {
     startDeadmanScheduler();
     __deadmanSchedulerStarted = true;
-    console.log("[Deadman] Scheduler auto-started from controller");
   }
 } catch (e) {
   console.warn("[Deadman] Scheduler not started:", e?.message || e);
@@ -78,7 +77,7 @@ const DeadmanController = {
       for (const [k, v] of Object.entries(patch))
         setObj[`safetyMonitoring.deadmanConfig.${k}`] = v;
 
-      log("Applying patch:", setObj);
+      
 
       const updated = await ElderlyProfile.findOneAndUpdate(
         { user: elderId },
@@ -116,7 +115,7 @@ const DeadmanController = {
           .json({ success: false, message: "Unauthorized" });
       }
 
-      log("➡️ CHECK-IN request", { elderId, role });
+      
 
       if (role !== "elderly") {
         log("⛔ Reject: user is not elderly");
@@ -156,9 +155,7 @@ const DeadmanController = {
       const deadmanState = updatedProf.safetyMonitoring?.deadmanState || {};
       const deadmanConfig = updatedProf.safetyMonitoring?.deadmanConfig || {};
 
-      log("📝 Deadman state updated OK", {
-        lastCheckinAt: deadmanState.lastCheckinAt,
-      });
+      
 
       return res.json({
         success: true,
@@ -198,7 +195,7 @@ const DeadmanController = {
         { $set: { "safetyMonitoring.deadmanState.snoozeUntil": until } }
       );
 
-      log("Snoozed until:", until);
+      
       return res.json({ success: true, data: { snoozeUntil: until } });
     } catch (err) {
       console.error("[DEADMAN][snooze][ERROR]:", err?.message || err);
@@ -250,11 +247,11 @@ const DeadmanController = {
       // 1) bảo đảm có ElderlyProfile
       let prof = await ElderlyProfile.findOne({ user: elderId }).lean();
       if (!prof) {
-        log("ℹ️ No ElderlyProfile found — creating with defaults");
+        
         try {
           const created = await ElderlyProfile.create({ user: elderId });
           prof = created?.toObject?.() || created;
-          log("✅ ElderlyProfile created:", { id: prof?._id });
+          
         } catch (e) {
           console.error(
             "[DEADMAN][choiceNotify][createProfile][ERROR]:",
@@ -279,10 +276,7 @@ const DeadmanController = {
           },
         }
       );
-      log("📝 Mongo update:", {
-        matched: upd.matchedCount,
-        modified: upd.modifiedCount,
-      });
+      
 
       // 3) message theo choice
       const msgMap = {
@@ -328,10 +322,7 @@ const DeadmanController = {
       const families = rels.map((r) => r?.family).filter(Boolean);
       const recipientIds = families.map((f) => f._id);
 
-      log("👨‍👩‍👧‍👦 Relatives for choiceNotify:", {
-        countRelDocs: rels.length,
-        countFamilies: families.length,
-      });
+      
 
       // 6) tạo bản ghi notification
       if (recipientIds.length > 0) {
@@ -355,11 +346,7 @@ const DeadmanController = {
 
       // 7) gửi push (nếu có token)
       if (families.length > 0) {
-        console.log("\n====== [DEADMAN CHOICE] ======");
-          console.log("[1] Elder ID:", elderId);
-          console.log("[2] Choice:", choice);
-          console.log("[3] Families found:", families?.length);
-          console.log("[4] Recipients IDs:", recipientIds);
+        
         const pushResult = await trySendPush({
           recipients: families,
           title: msgMap.title,
@@ -373,7 +360,7 @@ const DeadmanController = {
             action: "open_app",
           },
         });
-        log("📤 trySendPush result:", pushResult);
+        
       } else {
         log("⚠️ No family recipients → skip push");
       }
@@ -405,11 +392,7 @@ const DeadmanController = {
         data: { type: "deadman_reminder", action: "checkin" },
       });
 
-      console.log(
-        `[DEADMAN][_remindElder] Reminder sent to ${
-          elder.fullName || elderUserId
-        }`
-      );
+      
     } catch (err) {
       console.error("[DEADMAN][_remindElder][ERROR]:", err?.message || err);
     }
@@ -425,7 +408,7 @@ const DeadmanController = {
       const alertCountToday = options?.alertCountToday ?? null;
       const isAutoSOS = !!options?.isAutoSOS;
 
-      log("Start _alertRelatives", { elderUserId, alertCountToday, isAutoSOS });
+      
 
       // 1) Lấy danh sách người thân có quyền nhận cảnh báo
       const rels = await Relationship.find({
@@ -452,10 +435,7 @@ const DeadmanController = {
       // ✅ NHÁNH AUTO SOS (lần thứ 3)
       // ==========================
       if (isAutoSOS) {
-        log("Auto-SOS branch", {
-          alertCountToday,
-          recipientIdsCount: recipientIds.length,
-        });
+        
 
         // 2.1. Lưu notification in-app cho người thân
         if (recipientIds.length > 0) {
@@ -492,14 +472,12 @@ const DeadmanController = {
               groupKey: "deadman_auto_sos",
             },
           });
-          log("📤 Auto-SOS push result (elder only):", { pushResult });
+          
         } else {
           log("⚠️ Không tìm thấy device của người cao tuổi để gửi autoSOS");
         }
 
-        console.log(
-          `[DEADMAN][_alertRelatives] DONE (autoSOS). relatives=${families.length}, alertCountToday=${alertCountToday}, isAutoSOS=${isAutoSOS}`
-        );
+        
         return; // Kết thúc nhánh autoSOS
       }
 
@@ -524,17 +502,12 @@ const DeadmanController = {
           body: "Người thân hôm nay chưa xác nhận an toàn. Vui lòng liên hệ.",
           data: { type: "deadman_alert", action: "open_app" },
         });
-        log("📤 Normal alert push result:", {
-          countRecipients: families.length,
-          pushResult,
-        });
+        
       } else {
-        log("⚠️ No families to receive normal alert");
+        
       }
 
-      console.log(
-        `[DEADMAN][_alertRelatives] DONE (normal). relatives=${families.length}`
-      );
+      
     } catch (err) {
       console.error("[DEADMAN][_alertRelatives][ERROR]:", err?.message || err);
     }
