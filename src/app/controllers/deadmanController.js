@@ -68,7 +68,7 @@ const DeadmanController = {
       for (const [k, v] of Object.entries(patch))
         setObj[`safetyMonitoring.deadmanConfig.${k}`] = v;
 
-      log("Applying patch:", setObj);
+      
 
       const updated = await ElderlyProfile.findOneAndUpdate(
         { user: elderId },
@@ -102,7 +102,7 @@ const DeadmanController = {
           .json({ success: false, message: "Unauthorized" });
       }
 
-      log("➡️ CHECK-IN request", { elderId, role });
+      
 
       if (role !== "elderly") {
         log("⛔ Reject: user is not elderly");
@@ -142,9 +142,7 @@ const DeadmanController = {
       const deadmanState = updatedProf.safetyMonitoring?.deadmanState || {};
       const deadmanConfig = updatedProf.safetyMonitoring?.deadmanConfig || {};
 
-      log("📝 Deadman state updated OK", {
-        lastCheckinAt: deadmanState.lastCheckinAt,
-      });
+      
 
       return res.json({
         success: true,
@@ -180,7 +178,7 @@ const DeadmanController = {
         { $set: { "safetyMonitoring.deadmanState.snoozeUntil": until } }
       );
 
-      log("Snoozed until:", until);
+      
       return res.json({ success: true, data: { snoozeUntil: until } });
     } catch (err) {
       return res.status(500).json({
@@ -227,11 +225,11 @@ const DeadmanController = {
       // 1) bảo đảm có ElderlyProfile
       let prof = await ElderlyProfile.findOne({ user: elderId }).lean();
       if (!prof) {
-        log("ℹ️ No ElderlyProfile found — creating with defaults");
+        
         try {
           const created = await ElderlyProfile.create({ user: elderId });
           prof = created?.toObject?.() || created;
-          log("✅ ElderlyProfile created:", { id: prof?._id });
+          
         } catch (e) {
           return res.status(500).json({
             success: false,
@@ -252,10 +250,7 @@ const DeadmanController = {
           },
         }
       );
-      log("📝 Mongo update:", {
-        matched: upd.matchedCount,
-        modified: upd.modifiedCount,
-      });
+      
 
       // 3) message theo choice
       const msgMap =
@@ -300,10 +295,7 @@ const DeadmanController = {
       const families = rels.map((r) => r?.family).filter(Boolean);
       const recipientIds = families.map((f) => f._id);
 
-      log("👨‍👩‍👧‍👦 Relatives for choiceNotify:", {
-        countRelDocs: rels.length,
-        countFamilies: families.length,
-      });
+      
 
       // 6) tạo bản ghi notification
       if (recipientIds.length > 0) {
@@ -340,7 +332,7 @@ const DeadmanController = {
             action: "open_app",
           },
         });
-        log("📤 trySendPush result:", pushResult);
+        
       } else {
         log("⚠️ No family recipients → skip push");
       }
@@ -380,7 +372,7 @@ const DeadmanController = {
       const alertCountToday = options?.alertCountToday ?? null;
       const isAutoSOS = !!options?.isAutoSOS;
 
-      log("Start _alertRelatives", { elderUserId, alertCountToday, isAutoSOS });
+      
 
       // 1) Lấy danh sách người thân có quyền nhận cảnh báo
       const rels = await Relationship.find({
@@ -407,10 +399,7 @@ const DeadmanController = {
       // ✅ NHÁNH AUTO SOS (lần thứ 3)
       // ==========================
       if (isAutoSOS) {
-        log("Auto-SOS branch", {
-          alertCountToday,
-          recipientIdsCount: recipientIds.length,
-        });
+        
 
         // 2.1. Lưu notification in-app cho người thân
         if (recipientIds.length > 0) {
@@ -447,7 +436,7 @@ const DeadmanController = {
               groupKey: "deadman_auto_sos",
             },
           });
-          log("📤 Auto-SOS push result (elder only):", { pushResult });
+          
         } else {
           log("⚠️ Không tìm thấy device của người cao tuổi để gửi autoSOS");
         }
@@ -476,12 +465,9 @@ const DeadmanController = {
           body: "Người thân hôm nay chưa xác nhận an toàn. Vui lòng liên hệ.",
           data: { type: "deadman_alert", action: "open_app" },
         });
-        log("📤 Normal alert push result:", {
-          countRecipients: families.length,
-          pushResult,
-        });
+        
       } else {
-        log("⚠️ No families to receive normal alert");
+        
       }
     } catch (err) {}
   },
