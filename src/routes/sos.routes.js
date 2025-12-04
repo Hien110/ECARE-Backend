@@ -4,6 +4,40 @@ const sosController = require('../app/controllers/sosController');
 const fcmController = require('../app/controllers/fcmController');
 const authMiddleware = require('../app/middlewares/authMiddleware');
 
+// ============= FCM TOKEN ROUTES (PHẢI ĐỊNH NGHĨA TRƯỚC!) =============
+// ⚠️ QUAN TRỌNG: FCM routes phải trước dynamic routes (:sosId) để router khớp đúng pattern
+
+/**
+ * @route   POST /api/sos/fcm/token
+ * @desc    Lưu FCM token khi user login hoặc mở app
+ * @body    { token: string, deviceInfo?: string }
+ * @access  Private
+ */
+router.post('/fcm/token', authMiddleware, fcmController.saveFCMToken);
+
+/**
+ * @route   DELETE /api/sos/fcm/token
+ * @desc    Xóa FCM token khi user logout
+ * @body    { token: string }
+ * @access  Private
+ */
+router.delete('/fcm/token', authMiddleware, fcmController.removeFCMToken);
+
+/**
+ * @route   GET /api/sos/fcm/tokens
+ * @desc    Lấy danh sách FCM tokens của user (để debug)
+ * @access  Private
+ */
+router.get('/fcm/tokens', authMiddleware, fcmController.getUserTokens);
+
+/**
+ * @route   POST /api/sos/fcm/test
+ * @desc    Test gửi notification
+ * @body    { title?: string, body?: string, data?: object }
+ * @access  Private
+ */
+router.post('/fcm/test', authMiddleware, fcmController.testNotification);
+
 // ============= SOS ROUTES =============
 
 /**
@@ -54,38 +88,5 @@ router.delete('/:sosId', authMiddleware, sosController.deleteSOSNotification);
  * @access  Private
  */
 router.post('/call/reject', authMiddleware, sosController.rejectSOSCall);
-
-// ============= FCM TOKEN ROUTES =============
-
-/**
- * @route   POST /api/sos/fcm/token
- * @desc    Lưu FCM token khi user login hoặc mở app
- * @body    { token: string, deviceInfo?: string }
- * @access  Private
- */
-router.post('/fcm/token', authMiddleware, fcmController.saveFCMToken);
-
-/**
- * @route   DELETE /api/sos/fcm/token
- * @desc    Xóa FCM token khi user logout
- * @body    { token: string }
- * @access  Private
- */
-router.delete('/fcm/token', authMiddleware, fcmController.removeFCMToken);
-
-/**
- * @route   GET /api/sos/fcm/tokens
- * @desc    Lấy danh sách FCM tokens của user (để debug)
- * @access  Private
- */
-router.get('/fcm/tokens', authMiddleware, fcmController.getUserTokens);
-
-/**
- * @route   POST /api/sos/fcm/test
- * @desc    Test gửi notification
- * @body    { title?: string, body?: string, data?: object }
- * @access  Private
- */
-router.post('/fcm/test', authMiddleware, fcmController.testNotification);
 
 module.exports = router;

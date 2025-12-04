@@ -279,6 +279,7 @@ const AiController = {
       function chooseModel(message) {
         // Với Gemini: dùng 1 model chính, có thể override bằng env
         return GEMINI_DEFAULT_MODEL;
+
       }
 
       function parseDoctorIntent(message) {
