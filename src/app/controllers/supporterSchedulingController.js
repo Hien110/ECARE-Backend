@@ -30,11 +30,9 @@ const schedulingController = {
    * - day:     scheduleDate (YYYY-MM-DD)
    * - month:   monthStart (YYYY-MM-DD), monthEnd? (auto 30d nếu không gửi), monthSessionsPerDay? (lấy từ service)
    */
-    createScheduling: async (req, res) => {
+createScheduling: async (req, res) => {
   const TAG = "[SupporterScheduling][create]";
   try {
-    console.log(TAG, "📥 Body nhận từ FE:", JSON.stringify(req.body, null, 2));
-
     const schedulingData = req.body || {};
     const {
       supporter,
@@ -53,55 +51,24 @@ const schedulingController = {
       monthSessionsPerDay, // FE có thể không gửi: lấy từ service
     } = schedulingData || {};
 
-    console.log(TAG, "➡️ Parsed fields:", {
-      supporter,
-      elderly,
-      createdBy,
-      service,
-      bookingType,
-      paymentStatus,
-      paymentMethod,
-      scheduleDate,
-      scheduleTime,
-      monthStart,
-      monthEnd,
-    });
-
     // Bắt các field bắt buộc tối thiểu theo yêu cầu business
     if (!supporter || !elderly || !createdBy || !service || !bookingType) {
-      console.warn(TAG, "❌ Thiếu field bắt buộc", {
-        supporter,
-        elderly,
-        createdBy,
-        service,
-        bookingType,
-      });
       return res.status(400).json({
         success: false,
         message:
           "Thiếu thông tin bắt buộc (supporter, elderly, createdBy, service, bookingType).",
       });
     }
+
     // Tối thiểu cần địa chỉ để di chuyển (theo form của bạn)
     if (!address) {
-      console.warn(TAG, "❌ Thiếu address");
       return res
         .status(400)
         .json({ success: false, message: "Thiếu địa chỉ (address)." });
     }
 
     // Tải service để snapshot giá + cấu hình
-    console.log(TAG, "🔍 Đang tìm SupporterService:", service);
     const svc = await SupporterService.findById(service).lean();
-    if (!svc) {
-      console.error(TAG, "❌ Không tìm thấy service hoặc null:", service);
-    } else {
-      console.log(TAG, "✅ Tìm thấy service:", {
-        _id: svc._id,
-        name: svc.name,
-        isActive: svc.isActive,
-      });
-    }
 
     if (!svc || !svc.isActive) {
       return res.status(400).json({
@@ -139,20 +106,11 @@ const schedulingController = {
       address: encryptField(address.trim()),
       bookingType,
       serviceSnapshot,
+      status: "confirmed", // ✅ luôn ở trạng thái đã xác nhận sau khi đặt lịch
     };
-
-    console.log(TAG, "🧾 basePayload ban đầu:", {
-      supporter: basePayload.supporter,
-      elderly: basePayload.elderly,
-      createdBy: basePayload.createdBy,
-      bookingType: basePayload.bookingType,
-      paymentStatus: basePayload.paymentStatus,
-      paymentMethod: basePayload.paymentMethod,
-    });
 
     if (bookingType === "session") {
       if (!scheduleDate || !scheduleTime) {
-        console.warn(TAG, "❌ Thiếu scheduleDate/scheduleTime cho session");
         return res.status(400).json({
           success: false,
           message: "Thiếu scheduleDate hoặc scheduleTime cho gói theo buổi.",
@@ -171,7 +129,6 @@ const schedulingController = {
       basePayload.priceAtBooking = priceAtBooking;
     } else if (bookingType === "day") {
       if (!scheduleDate) {
-        console.warn(TAG, "❌ Thiếu scheduleDate cho day");
         return res.status(400).json({
           success: false,
           message: "Thiếu scheduleDate cho gói theo ngày.",
@@ -183,7 +140,6 @@ const schedulingController = {
       basePayload.priceAtBooking = priceAtBooking;
     } else if (bookingType === "month") {
       if (!monthStart) {
-        console.warn(TAG, "❌ Thiếu monthStart cho month");
         return res.status(400).json({
           success: false,
           message: "Thiếu monthStart cho gói theo tháng.",
@@ -208,36 +164,17 @@ const schedulingController = {
       priceAtBooking = serviceSnapshot.byMonth.monthlyFee || 0;
       basePayload.priceAtBooking = priceAtBooking;
     } else {
-      console.warn(TAG, "❌ bookingType không hợp lệ:", bookingType);
       return res
         .status(400)
         .json({ success: false, message: "bookingType không hợp lệ." });
     }
 
-    console.log(TAG, "💾 Đang tạo SupporterScheduling với payload:", {
-      ...basePayload,
-      address: "[ENCRYPTED]", // tránh log raw address
-    });
-
     const created = await SupporterScheduling.create(basePayload);
-    console.log(TAG, "✅ Tạo lịch thành công, _id =", created._id);
 
-    // ================== AUTO KẾT NỐI RELATIONSHIP SAU KHI THANH TOÁN ==================
+    // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION ==================
     const payStatusLower = (basePayload.paymentStatus || "").toLowerCase();
-    console.log(
-      TAG,
-      "🔎 Kiểm tra auto-connect, paymentStatus =",
-      basePayload.paymentStatus,
-      "→",
-      payStatusLower
-    );
 
     if (payStatusLower === "paid" || payStatusLower === "unpaid") {
-      console.log(
-        TAG,
-        "✅ Điều kiện auto-connect thỏa mãn (paymentStatus = 'paid' hoặc 'unpaid')"
-      );
-
       try {
         // Lấy role của người tạo và elderly
         const [elderlyUser, creatorUser] = await Promise.all([
@@ -245,23 +182,8 @@ const schedulingController = {
           User.findById(createdBy).select("role"),
         ]);
 
-        console.log(TAG, "👤 elderlyUser:", elderlyUser && {
-          _id: elderlyUser._id,
-          role: elderlyUser.role,
-        });
-        console.log(TAG, "👤 creatorUser:", creatorUser && {
-          _id: creatorUser._id,
-          role: creatorUser.role,
-        });
-
-        if (!elderlyUser || !creatorUser) {
-          console.log(
-            TAG,
-            "⚠️ Không tìm thấy elderlyUser hoặc creatorUser, bỏ qua auto-connect"
-          );
-        } else {
+        if (elderlyUser && creatorUser) {
           const creatorRole = creatorUser.role;
-          console.log(TAG, "ℹ️ creatorRole =", creatorRole);
 
           // Hàm nhỏ tạo/accept 1 relationship + đảm bảo có Conversation 1–1
           const ensureAcceptedSupporterRelationshipInline = async (
@@ -271,29 +193,13 @@ const schedulingController = {
           ) => {
             const { relationshipLabel = "Người hỗ trợ" } = options || {};
             if (!elderlyId || !supporterId) {
-              console.log(
-                TAG,
-                "[ensureInline] ❌ thiếu elderlyId/supporterId",
-                { elderlyId, supporterId }
-              );
               return null;
             }
-
-            console.log(
-              TAG,
-              "[ensureInline] 🔍 Tìm Relationship",
-              { elderlyId, supporterId }
-            );
 
             const filter = { elderly: elderlyId, family: supporterId };
 
             let rel = await Relationship.findOne(filter);
             if (rel) {
-              console.log(
-                TAG,
-                "[ensureInline] ✅ Relationship đã tồn tại, status hiện tại =",
-                rel.status
-              );
               let changed = false;
               if (rel.status !== "accepted") {
                 rel.status = "accepted";
@@ -304,7 +210,7 @@ const schedulingController = {
                 rel.relationship = relationshipLabel;
                 changed = true;
               }
-              // ✅ Với "Người hỗ trợ" thì requestedBy phải là chính supporter
+              // Với "Người hỗ trợ" thì requestedBy phải là chính supporter
               if (
                 relationshipLabel === "Người hỗ trợ" &&
                 String(rel.requestedBy) !== String(supporterId)
@@ -315,22 +221,9 @@ const schedulingController = {
 
               if (changed) {
                 await rel.save();
-                console.log(
-                  TAG,
-                  "[ensureInline] 💾 Đã update relationship thành accepted + requestedBy = supporter"
-                );
-              } else {
-                console.log(
-                  TAG,
-                  "[ensureInline] ℹ️ Không cần update, giữ nguyên relationship"
-                );
               }
 
-              // 🔁 Đảm bảo có conversation 1–1 giữa elderly & supporter
-              console.log(
-                TAG,
-                "[ensureInline] 🔍 Kiểm tra Conversation giữa elderly & supporter"
-              );
+              // Đảm bảo có conversation 1–1 giữa elderly & supporter
               let conv = await Conversation.findOne({
                 isActive: true,
                 $and: [
@@ -340,60 +233,33 @@ const schedulingController = {
                 "participants.2": { $exists: false }, // chỉ 2 người
               });
 
-              if (conv) {
-                console.log(
-                  TAG,
-                  "[ensureInline] 💬 Conversation đã tồn tại, _id =",
-                  conv._id
-                );
-              } else {
-                console.log(
-                  TAG,
-                  "[ensureInline] ➕ Tạo Conversation mới elderly-supporter"
-                );
+              if (!conv) {
                 conv = new Conversation({
                   participants: [
                     { user: elderlyId },
                     { user: supporterId },
                   ],
-                  isActive: true, // theo schema hiện tại bạn đang dùng
+                  isActive: true,
                 });
                 await conv.save();
-                console.log(
-                  TAG,
-                  "[ensureInline] ✅ Đã tạo Conversation mới, _id =",
-                  conv._id
-                );
               }
 
               return { relationship: rel, conversation: conv };
             }
 
-            console.log(
-              TAG,
-              "[ensureInline] ➕ Tạo Relationship mới (accepted, requestedBy = supporter)"
-            );
+            // Chưa có relationship → tạo mới accepted
             rel = new Relationship({
               elderly: elderlyId,
               family: supporterId,
               relationship: relationshipLabel,
               status: "accepted",
-              requestedBy: supporterId,   // ✅ supporter là người “gửi kết nối”
+              requestedBy: supporterId,
               respondedAt: new Date(),
             });
 
             await rel.save();
-            console.log(
-              TAG,
-              "[ensureInline] ✅ Đã tạo relationship mới, _id =",
-              rel._id
-            );
 
-            // 🔁 Tạo luôn conversation mới nếu chưa có
-            console.log(
-              TAG,
-              "[ensureInline] ➕ Tạo Conversation mới elderly-supporter (do relationship mới)"
-            );
+            // Tạo luôn conversation mới
             let conv = new Conversation({
               participants: [
                 { user: elderlyId },
@@ -402,11 +268,6 @@ const schedulingController = {
               isActive: true,
             });
             await conv.save();
-            console.log(
-              TAG,
-              "[ensureInline] ✅ Đã tạo Conversation mới, _id =",
-              conv._id
-            );
 
             return { relationship: rel, conversation: conv };
           };
@@ -414,11 +275,6 @@ const schedulingController = {
           if (creatorRole === "family") {
             // CASE 1: Người thân đặt gói hỗ trợ cho người cao tuổi
             const familyId = createdBy;
-            console.log(
-              TAG,
-              "👨‍👩‍👧 CASE FAMILY đặt cho elderly, familyId =",
-              familyId
-            );
 
             // Lấy tất cả elderly đang connect accepted với family này
             const acceptedRels = await Relationship.find({
@@ -426,14 +282,7 @@ const schedulingController = {
               status: "accepted",
             }).select("elderly");
 
-            console.log(
-              TAG,
-              "📊 Số relationship accepted của family:",
-              acceptedRels.length
-            );
-
             const elderlySet = new Set();
-
             acceptedRels.forEach((rel) => {
               if (rel.elderly) elderlySet.add(String(rel.elderly));
             });
@@ -441,11 +290,6 @@ const schedulingController = {
             elderlySet.add(String(elderly));
 
             const elderlyIds = Array.from(elderlySet);
-            console.log(
-              TAG,
-              "👵 elderlyIds sẽ auto-connect với supporter:",
-              elderlyIds
-            );
 
             for (const eid of elderlyIds) {
               await ensureAcceptedSupporterRelationshipInline(eid, supporter, {
@@ -454,43 +298,19 @@ const schedulingController = {
             }
           } else if (creatorRole === "elderly") {
             // CASE 2: Người cao tuổi tự đặt gói hỗ trợ
-            console.log(
-              TAG,
-              "👵 CASE ELDERLY tự đặt → connect elderly-supporter",
-              { elderly, supporter }
-            );
-
             await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
               relationshipLabel: "Người hỗ trợ",
             });
           } else {
             // CASE 3: Vai trò khác (admin, supporter tự đặt hộ, ...) → ít nhất connect elderly hiện tại
-            console.log(
-              TAG,
-              "👤 CASE role khác (",
-              creatorRole,
-              ") → fallback connect elderly-supporter",
-              { elderly, supporter }
-            );
-
             await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
               relationshipLabel: "Người hỗ trợ",
             });
           }
         }
       } catch (autoErr) {
-        console.error(
-          TAG,
-          "❌ Lỗi trong block auto-connect supporter:",
-          autoErr
-        );
+        // nuốt lỗi auto-connect, tránh làm fail booking
       }
-    } else {
-      console.log(
-        TAG,
-        "ℹ️ paymentStatus KHÔNG phải 'paid' → KHÔNG auto-connect",
-        basePayload.paymentStatus
-      );
     }
     // ================== HẾT PHẦN AUTO KẾT NỐI ==================
 
@@ -500,12 +320,10 @@ const schedulingController = {
       plain.address = tryDecryptField(plain.address);
     }
 
-    console.log(TAG, "📤 Trả response thành công cho FE");
     return res
       .status(201)
       .json({ success: true, message: "Đặt lịch thành công", data: plain });
   } catch (error) {
-    console.error("[SupporterScheduling][create] ❌ Error creating scheduling:", error);
     return res.status(500).json({
       success: false,
       message: "Đặt lịch thất bại",

@@ -37,12 +37,8 @@ async function createDistressNotifications(opts = {}) {
   try {
     const elderUser = await User.findById(elderId).select("fullName role");
     if (elderUser?.fullName) elderName = elderUser.fullName;
-    console.log("[AI][AlertFlow] Elder name:", elderName);
   } catch (e) {
-    console.warn(
-      "[AI][AlertFlow] Could not fetch elder name:",
-      e?.message || e
-    );
+    // bỏ log, giữ im lặng nếu lỗi
   }
 
   const finalTitle =
@@ -83,21 +79,11 @@ async function createDistressNotifications(opts = {}) {
 }
 
 function trySendPush({ recipients = [], title, body, data = {} } = {}) {
-  const DEBUG = true; // 🔥 Bật log tạm thời cho bạn debug
-
-  console.log("\n================= [PUSH DEBUG] =================");
-  console.log("[1] Input recipients:", recipients?.length);
-  console.log("[2] Input title:", title);
-  console.log("[3] Input body:", body);
-  console.log("[4] Input data:", data);
-
   if (!firebaseAdmin) {
-    console.log("[PUSH] ❌ No firebaseAdmin instance");
     return Promise.resolve({ ok: false, reason: "no-firebase" });
   }
 
   if (!recipients.length) {
-    console.log("[PUSH] ❌ No recipients -> Nothing to send");
     return Promise.resolve({ ok: false, reason: "no-recipients" });
   }
 
@@ -111,32 +97,28 @@ function trySendPush({ recipients = [], title, body, data = {} } = {}) {
     return [...legacy, ...fcmArr];
   });
 
-  console.log("[5] Extracted tokens:", tokens);
   if (!tokens.length) {
-    console.log("[PUSH] ❌ Recipients have NO TOKENS");
     return Promise.resolve({ ok: false, reason: "no-tokens" });
   }
 
-  // 🔥 Nếu là Deadman phys_unwell → gửi bằng channel SOS
+  // Nếu là Deadman phys_unwell → gửi bằng channel SOS
   const isDeadmanPhys =
     data?.type === "deadman_choice" && data?.choice === "phys_unwell";
 
   const androidNoti = isDeadmanPhys
-  ? {
-      channelId: "deadman_phys_unwell_sos",
-      sound: "sos_alarm",
-      visibility: "public",
-      sticky: false,
-      defaultVibrateTimings: false,
-      vibrateTimingsMillis: [0, 500, 500, 500, 500, 500, 500],  // <– FIXED
-    }
-  : {
-      sound: "default",
-      visibility: "public",
-      sticky: false,
-    };
-
-  console.log("[6] Android payload:", androidNoti);
+    ? {
+        channelId: "deadman_phys_unwell_sos",
+        sound: "sos_alarm",
+        visibility: "public",
+        sticky: false,
+        defaultVibrateTimings: false,
+        vibrateTimingsMillis: [0, 500, 500, 500, 500, 500, 500],
+      }
+    : {
+        sound: "default",
+        visibility: "public",
+        sticky: false,
+      };
 
   const message = {
     tokens,
@@ -150,24 +132,10 @@ function trySendPush({ recipients = [], title, body, data = {} } = {}) {
     ),
   };
 
-  console.log("[7] Final FCM payload:", message);
-
-  // Gửi đến FCM
   return firebaseAdmin
     .messaging()
     .sendEachForMulticast(message)
     .then((resp) => {
-      console.log("[8] FCM Response:", {
-        successCount: resp.successCount,
-        failureCount: resp.failureCount,
-      });
-
-      resp.responses.forEach((r, idx) => {
-        console.log("    • Token:", tokens[idx]?.slice(-8), 
-                    "| success:", r.success, 
-                    "| error:", r.error?.message);
-      });
-
       return {
         ok: true,
         successCount: resp.successCount,
@@ -175,11 +143,9 @@ function trySendPush({ recipients = [], title, body, data = {} } = {}) {
       };
     })
     .catch((err) => {
-      console.error("[9] ❌ FCM ERROR:", err);
       return { ok: false, reason: err?.message || "push-error" };
     });
 }
-
 
 function markDeliveryResults(notifications = [], channel, result = {}) {
   if (!notifications.length) return Promise.resolve();
