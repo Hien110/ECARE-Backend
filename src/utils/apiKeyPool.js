@@ -1,4 +1,4 @@
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      const MAX_PER_DAY = 20;
+const MAX_PER_DAY = 20;
 
 const TZ_OFFSET_MINUTES = parseInt(process.env.TZ_OFFSET_MINUTES || "420", 10);
 

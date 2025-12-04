@@ -77,6 +77,7 @@ const authenticationController = {
           .json({ message: "Người dùng không tồn tại hoặc chưa kích hoạt" });
       }
       if (!user.isActive) {
+        return res.status(403).json({ message: "Tài khoản chưa được kích hoạt" });
       }
 
       const ok = await bcrypt.compare(password, user.password);
@@ -85,13 +86,11 @@ const authenticationController = {
           .status(401)
           .json({ message: "Số điện thoại hoặc mật khẩu không đúng" });
 
-      // Migrate lần đầu: bảo đảm enc/hash đúng plugin
       let touched = false;
       if (primaryHash && (!user.phoneNumberHash || user.phoneNumberHash !== primaryHash)) {
         user.phoneNumberHash = primaryHash;
         touched = true;
       }
-      // no alt field required; using only primary hash
       if (!user.phoneNumberEnc && norm) {
         user.set("phoneNumber", norm);
         touched = true;

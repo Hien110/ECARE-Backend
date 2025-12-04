@@ -11,7 +11,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, enum: ['elderly','family','supporter','doctor','admin'], required: true },
 
   fullName: { type: String, required: true, trim: true },
-  gender: { type: String, enum: ['male','female','other'], required: true },
+  gender: { type: String, enum: ['Nam','Nữ','Khác'], required: true },
 
   avatar: {
     type: String,

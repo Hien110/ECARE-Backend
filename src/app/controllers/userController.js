@@ -254,24 +254,26 @@ const UserController = {
   uploadCCCD: async (req, res) => {
     const t0 = Date.now();
 
-    // helper log an toàn (không in toàn bộ base64)
     const len = (s) => (s ? String(s).length : 0);
     const peek = (s) => (s ? String(s).slice(0, 40) + "..." : "(nil)");
 
     try {
-      const {
-        phoneNumber,
-        frontImageBase64,
-        backImageBase64,
-        frontMime,
-        backMime,
-      } = req.body || {};
-
-      if (!phoneNumber || !frontImageBase64 || !backImageBase64) {
-        return res.status(400).json({
-          success: false,
-          message: "Thiếu phoneNumber hoặc ảnh CCCD (trước/sau)",
-        });
+      const rawPhone = (req.body?.phoneNumber ?? '').trim();
+      const phoneNumber = rawPhone;
+      const ct = req.headers['content-type'];
+      const frontRaw = req.files?.frontImage?.[0];
+      const backRaw = req.files?.backImage?.[0];
+      let frontSize = 0, backSize = 0;
+      try { if (frontRaw?.size) frontSize = frontRaw.size; else if (frontRaw?.path) frontSize = require('fs').statSync(frontRaw.path).size; } catch {}
+      try { if (backRaw?.size) backSize = backRaw.size; else if (backRaw?.path) backSize = require('fs').statSync(backRaw.path).size; } catch {}
+      console.log(`[uploadCCCD] ct='${ct}', phoneNumber='${phoneNumber}', frontSize=${frontSize}, backSize=${backSize}`);
+      const frontFile = frontRaw;
+      const backFile = backRaw;
+      if (!phoneNumber) {
+        return res.status(400).json({ success: false, message: "Thiếu số điện thoại" });
+      }
+      if (!frontFile && !backFile) {
+        return res.status(400).json({ success: false, message: "Thiếu ảnh mặt trước hoặc mặt sau CCCD" });
       }
 
       // Verify đã qua OTP
@@ -284,6 +286,7 @@ const UserController = {
         return res.status(404).json({
           success: false,
           message: "Session đăng ký tạm thời không tồn tại hoặc đã hết hạn",
+          nextStep: "enterPhone", 
         });
       }
       const temp = JSON.parse(tempStr);
@@ -293,23 +296,62 @@ const UserController = {
           .json({ success: false, message: "Chưa xác thực OTP" });
       }
 
-      const ocrRes = await extractCccdFieldsWithGemini({
-        frontImageBase64,
-        backImageBase64,
-        frontMime: frontMime || "image/jpeg",
-        backMime: backMime || "image/jpeg",
-      });
-      if (!ocrRes?.success) {
-        return res.status(400).json({
+      // Viettel AI OCR using API key (multipart files)
+      const { callViettelIdOcr, normalizeViettelId } = require("../../utils/viettelOcr");
+      const endpoint = process.env.VIETTEL_OCR_ENDPOINT;
+      const token = process.env.VIETTEL_OCR_TOKEN;
+
+      if (!endpoint || !token) {
+        console.error("[uploadCCCD] Missing Viettel OCR config", {
+          hasEndpoint: !!endpoint,
+          hasToken: !!token,
+        });
+        return res.status(500).json({
           success: false,
-          message: ocrRes?.message || "OCR thất bại",
-          code: ocrRes?.code || null,
-          attempts: ocrRes?.attempts || null, // GIỮ để nhìn thấy lí do thực
+          message: "Thiếu cấu hình Viettel OCR",
+          detail: {
+            VIETTEL_OCR_ENDPOINT: endpoint ? "SET" : "MISSING",
+            VIETTEL_OCR_TOKEN: token ? "SET" : "MISSING",
+          },
+        });
+      }
+      const viettel = await callViettelIdOcr({
+        frontPath: frontFile?.path,
+        backPath: backFile?.path,
+        endpoint,
+        token,
+      });
+
+      // Cleanup temp files
+      [frontFile?.path, backFile?.path].filter(Boolean).forEach((p) => {
+        try { require("fs").unlinkSync(p); } catch (_) {}
+      });
+
+      if (!viettel.success) {
+        const code = viettel.code;
+        const reason = code === 401 ? "Unauthorized token"
+          : code === 403 ? "Forbidden"
+          : code === 429 ? "Rate limited"
+          : code === 400 ? "Bad request"
+          : "Upstream error";
+        const preview = typeof viettel.detail === 'string' 
+          ? viettel.detail.slice(0, 400) 
+          : JSON.stringify(viettel.detail)?.slice(0, 400);
+        console.error("[uploadCCCD][viettel-ocr] failure", { code, reason, preview });
+        return res.status(502).json({ 
+          success: false, 
+          message: `OCR thất bại: ${reason}`, 
+          code, 
+          detail: viettel.detail 
         });
       }
 
-      const { identityCard, fullName, dateOfBirth, gender, address } =
-        ocrRes.data || {};
+      const mapped = normalizeViettelId(viettel.data);
+      const identityCard = mapped.idNumber;
+      const fullName = mapped.fullName;
+      const dateOfBirth = mapped.dob;
+      const gender = mapped.gender || "other";
+      const address = mapped.address;
       if (!identityCard) {
         return res.status(422).json({
           success: false,
@@ -394,7 +436,7 @@ const UserController = {
       if (!dataStr)
         return res
           .status(404)
-          .json({ success: false, message: "Session đăng ký tạm thời không tồn tại hoặc đã hết hạn" });
+          .json({ success: false, message: "Session đăng ký tạm thời không tồn tại hoặc đã hết hạn", nextStep: "enterPhone" });
 
       const temp = JSON.parse(dataStr);
       if (!temp.otpVerified)
