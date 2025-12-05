@@ -14,18 +14,12 @@ try {
   if (!__deadmanSchedulerStarted && typeof startDeadmanScheduler === "function") {
     startDeadmanScheduler();
     __deadmanSchedulerStarted = true;
-    console.log("[Deadman] Scheduler auto-started from controller");
   }
-} catch (e) {
-  console.warn("[Deadman] Scheduler not started:", e?.message || e);
-}
+} catch (e) {}
 
 const DeadmanController = {
   status: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][status][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -43,7 +37,6 @@ const DeadmanController = {
         data: prof?.safetyMonitoring || {},
       });
     } catch (err) {
-      console.error("[DEADMAN][status][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: err?.message || "Lỗi lấy trạng thái Deadman",
@@ -52,10 +45,7 @@ const DeadmanController = {
   },
 
   config: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][config][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -78,7 +68,7 @@ const DeadmanController = {
       for (const [k, v] of Object.entries(patch))
         setObj[`safetyMonitoring.deadmanConfig.${k}`] = v;
 
-      log("Applying patch:", setObj);
+      
 
       const updated = await ElderlyProfile.findOneAndUpdate(
         { user: elderId },
@@ -91,7 +81,6 @@ const DeadmanController = {
         data: updated?.safetyMonitoring?.deadmanConfig || {},
       });
     } catch (err) {
-      console.error("[DEADMAN][config][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể cập nhật cấu hình Deadman",
@@ -100,10 +89,7 @@ const DeadmanController = {
   },
 
   checkin: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][checkin][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -116,7 +102,7 @@ const DeadmanController = {
           .json({ success: false, message: "Unauthorized" });
       }
 
-      log("➡️ CHECK-IN request", { elderId, role });
+      
 
       if (role !== "elderly") {
         log("⛔ Reject: user is not elderly");
@@ -156,9 +142,7 @@ const DeadmanController = {
       const deadmanState = updatedProf.safetyMonitoring?.deadmanState || {};
       const deadmanConfig = updatedProf.safetyMonitoring?.deadmanConfig || {};
 
-      log("📝 Deadman state updated OK", {
-        lastCheckinAt: deadmanState.lastCheckinAt,
-      });
+      
 
       return res.json({
         success: true,
@@ -169,7 +153,6 @@ const DeadmanController = {
         },
       });
     } catch (err) {
-      console.error("[DEADMAN][checkin][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể thực hiện check-in (Lỗi server).",
@@ -178,10 +161,7 @@ const DeadmanController = {
   },
 
   snooze: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][snooze][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -198,10 +178,9 @@ const DeadmanController = {
         { $set: { "safetyMonitoring.deadmanState.snoozeUntil": until } }
       );
 
-      log("Snoozed until:", until);
+      
       return res.json({ success: true, data: { snoozeUntil: until } });
     } catch (err) {
-      console.error("[DEADMAN][snooze][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể đặt snooze",
@@ -211,10 +190,7 @@ const DeadmanController = {
 
   // ====== LỰA CHỌN HÔM NAY (safe / phys_unwell / psy_unwell) ======
   choiceNotify: async (req, res) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][choiceNotify][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const elderId = req.user?.userId || req.user?._id;
@@ -243,23 +219,18 @@ const DeadmanController = {
         });
       }
       const choice = rawChoice;
-      const customMessage = typeof req.body?.message === "string"
-        ? req.body.message.trim()
-        : "";
+      const customMessage =
+        typeof req.body?.message === "string" ? req.body.message.trim() : "";
 
       // 1) bảo đảm có ElderlyProfile
       let prof = await ElderlyProfile.findOne({ user: elderId }).lean();
       if (!prof) {
-        log("ℹ️ No ElderlyProfile found — creating with defaults");
+        
         try {
           const created = await ElderlyProfile.create({ user: elderId });
           prof = created?.toObject?.() || created;
-          log("✅ ElderlyProfile created:", { id: prof?._id });
+          
         } catch (e) {
-          console.error(
-            "[DEADMAN][choiceNotify][createProfile][ERROR]:",
-            e?.message || e
-          );
           return res.status(500).json({
             success: false,
             message: "Không thể tạo hồ sơ ElderlyProfile cho người dùng.",
@@ -279,35 +250,31 @@ const DeadmanController = {
           },
         }
       );
-      log("📝 Mongo update:", {
-        matched: upd.matchedCount,
-        modified: upd.modifiedCount,
-      });
+      
 
       // 3) message theo choice
-      const msgMap = {
-        safe: {
-          title: "✅ Hôm nay an toàn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: sức khỏe & tâm trạng đều tốt.",
-          severity: "info",
-        },
-        phys_unwell: {
-          title: "⚕️ Sức khỏe không ổn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: KHÔNG ỔN về SỨC KHỎE.",
-          severity: "high", // dùng high để ưu tiên
-        },
-        psy_unwell: {
-          title: "💭 Tâm lý không ổn",
-          body:
-            customMessage ||
-            "Người cao tuổi báo: KHÔNG ỔN về TÂM LÝ.",
-          severity: "medium",
-        },
-      }[choice];
+      const msgMap =
+        {
+          safe: {
+            title: "✅ Hôm nay an toàn",
+            body:
+              customMessage ||
+              "Người cao tuổi báo: sức khỏe & tâm trạng đều tốt.",
+            severity: "info",
+          },
+          phys_unwell: {
+            title: "⚕️ Sức khỏe không ổn",
+            body:
+              customMessage || "Người cao tuổi báo: KHÔNG ỔN về SỨC KHỎE.",
+            severity: "high", // dùng high để ưu tiên
+          },
+          psy_unwell: {
+            title: "💭 Tâm lý không ổn",
+            body:
+              customMessage || "Người cao tuổi báo: KHÔNG ỔN về TÂM LÝ.",
+            severity: "medium",
+          },
+        }[choice];
 
       // 4) lấy tên elder để đính kèm
       const elderUser = await User.findById(elderId).select("fullName");
@@ -328,10 +295,7 @@ const DeadmanController = {
       const families = rels.map((r) => r?.family).filter(Boolean);
       const recipientIds = families.map((f) => f._id);
 
-      log("👨‍👩‍👧‍👦 Relatives for choiceNotify:", {
-        countRelDocs: rels.length,
-        countFamilies: families.length,
-      });
+      
 
       // 6) tạo bản ghi notification
       if (recipientIds.length > 0) {
@@ -355,11 +319,6 @@ const DeadmanController = {
 
       // 7) gửi push (nếu có token)
       if (families.length > 0) {
-        console.log("\n====== [DEADMAN CHOICE] ======");
-          console.log("[1] Elder ID:", elderId);
-          console.log("[2] Choice:", choice);
-          console.log("[3] Families found:", families?.length);
-          console.log("[4] Recipients IDs:", recipientIds);
         const pushResult = await trySendPush({
           recipients: families,
           title: msgMap.title,
@@ -373,7 +332,7 @@ const DeadmanController = {
             action: "open_app",
           },
         });
-        log("📤 trySendPush result:", pushResult);
+        
       } else {
         log("⚠️ No family recipients → skip push");
       }
@@ -383,7 +342,6 @@ const DeadmanController = {
         data: { lastCheckinAt: now, choice },
       });
     } catch (err) {
-      console.error("[DEADMAN][choiceNotify][ERROR]:", err?.message || err);
       return res.status(500).json({
         success: false,
         message: "Không thể xử lý lựa chọn hôm nay.",
@@ -404,28 +362,17 @@ const DeadmanController = {
         body: "Bạn chưa xác nhận “Tôi ổn hôm nay”. Vui lòng bấm để xác nhận.",
         data: { type: "deadman_reminder", action: "checkin" },
       });
-
-      console.log(
-        `[DEADMAN][_remindElder] Reminder sent to ${
-          elder.fullName || elderUserId
-        }`
-      );
-    } catch (err) {
-      console.error("[DEADMAN][_remindElder][ERROR]:", err?.message || err);
-    }
+    } catch (err) {}
   },
 
   _alertRelatives: async (elderUserId, options = {}) => {
-    const DEBUG = process.env.NODE_ENV !== "production";
-    const reqId = Math.random().toString(36).slice(2, 8);
-    const log = (...args) =>
-      DEBUG && console.log(`[DEADMAN][_alertRelatives][#${reqId}]`, ...args);
+    const log = () => {};
 
     try {
       const alertCountToday = options?.alertCountToday ?? null;
       const isAutoSOS = !!options?.isAutoSOS;
 
-      log("Start _alertRelatives", { elderUserId, alertCountToday, isAutoSOS });
+      
 
       // 1) Lấy danh sách người thân có quyền nhận cảnh báo
       const rels = await Relationship.find({
@@ -452,10 +399,7 @@ const DeadmanController = {
       // ✅ NHÁNH AUTO SOS (lần thứ 3)
       // ==========================
       if (isAutoSOS) {
-        log("Auto-SOS branch", {
-          alertCountToday,
-          recipientIdsCount: recipientIds.length,
-        });
+        
 
         // 2.1. Lưu notification in-app cho người thân
         if (recipientIds.length > 0) {
@@ -492,15 +436,12 @@ const DeadmanController = {
               groupKey: "deadman_auto_sos",
             },
           });
-          log("📤 Auto-SOS push result (elder only):", { pushResult });
+          
         } else {
           log("⚠️ Không tìm thấy device của người cao tuổi để gửi autoSOS");
         }
 
-        console.log(
-          `[DEADMAN][_alertRelatives] DONE (autoSOS). relatives=${families.length}, alertCountToday=${alertCountToday}, isAutoSOS=${isAutoSOS}`
-        );
-        return; // Kết thúc nhánh autoSOS
+        return;
       }
 
       // ==============================
@@ -524,20 +465,11 @@ const DeadmanController = {
           body: "Người thân hôm nay chưa xác nhận an toàn. Vui lòng liên hệ.",
           data: { type: "deadman_alert", action: "open_app" },
         });
-        log("📤 Normal alert push result:", {
-          countRecipients: families.length,
-          pushResult,
-        });
+        
       } else {
-        log("⚠️ No families to receive normal alert");
+        
       }
-
-      console.log(
-        `[DEADMAN][_alertRelatives] DONE (normal). relatives=${families.length}`
-      );
-    } catch (err) {
-      console.error("[DEADMAN][_alertRelatives][ERROR]:", err?.message || err);
-    }
+    } catch (err) {}
   },
 };
 

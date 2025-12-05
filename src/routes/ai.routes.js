@@ -14,4 +14,8 @@ router.delete('/sessions', AiController.deleteSession);
 
 
 
+// Viettel AI OCR for CCCD
+const ocrController = require("../app/controllers/ocrController");
+router.post("/ocr/viettel/id-card", ocrController.middleware, ocrController.viettelIdCard);
+
 module.exports = router;

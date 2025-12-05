@@ -5,6 +5,11 @@ const UserController = require("../app/controllers/userController");
 const authenticateToken = require("../app/middlewares/authMiddleware");
 const { upload } = require("../app/middlewares/upload");
 const AuthController = require("../app/controllers/authenticationController");
+// Multer for CCCD OCR (disk temp so we have file paths)
+const multer = require("multer");
+const os = require("os");
+const path = require("path");
+const uploadOcr = multer({ dest: path.join(os.tmpdir(), "ecare-ocr") });
 /* ---------- Public ---------- */
 router.post("/registerUser", UserController.registerUser);
 router.post("/loginUser", AuthController.loginUser);
@@ -13,8 +18,15 @@ router.post("/loginUser", AuthController.loginUser);
 router.post("/send-otp", UserController.sendOTP);
 router.post("/verify-otp", UserController.verifyOTP);
 
-// B3: Upload CCCD -> OCR (body JSON: frontImageBase64, backImageBase64, ...)
-router.post("/register/kyc/cccd", UserController.uploadCCCD);
+// B3: Upload CCCD (multipart) -> OCR
+router.post(
+	"/register/kyc/cccd",
+	uploadOcr.fields([
+		{ name: "frontImage", maxCount: 1 },
+		{ name: "backImage", maxCount: 1 },
+	]),
+	UserController.uploadCCCD
+);
 
 // B4: Hoàn tất hồ sơ
 router.post("/register/complete", UserController.completeProfile);

@@ -14,6 +14,7 @@
   "type": "commonjs",
   "dependencies": {
     "@google/genai": "^1.22.0",
+    "@google/generative-ai": "^0.24.1",
     "@payos/node": "^2.0.3",
     "agora-token": "^2.0.5",
     "axios": "^1.11.0",
