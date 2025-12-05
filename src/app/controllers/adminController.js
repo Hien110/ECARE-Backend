@@ -512,7 +512,7 @@ const AdminController = {
         });
       }
 
-      if (!["male", "female", "other"].includes(gender)) {
+      if (!["Nam", "Nữ", "Khác"].includes(gender)) {
         return res.status(400).json({ success: false, message: "Giới tính không hợp lệ" });
       }
 
@@ -604,7 +604,7 @@ const AdminController = {
         });
       }
 
-      if (!["male", "female", "other"].includes(gender)) {
+      if (!["Nam", "Nữ", "Khác"].includes(gender)) {
         return res.status(400).json({ success: false, message: "Giới tính không hợp lệ" });
       }
 
