@@ -9,7 +9,7 @@ const RegistrationHealthPackage = require("../models/RegistrationHealthPackage")
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
 const XLSX = require('xlsx');
-
+const Payment = require("../models/Payment");
 // Đảm bảo models đã được đăng ký
 if (!mongoose.models.HealthPackage) {
   console.warn('⚠️ HealthPackage model chưa được đăng ký, đang thử require lại...');
@@ -309,8 +309,8 @@ const validateSupporterRow = (row, rowNumber) => {
     errors.push("Email không hợp lệ");
   }
 
-  if (!row.gender || !['male', 'female', 'other'].includes(row.gender.toLowerCase())) {
-    errors.push("Giới tính phải là male, female hoặc other");
+  if (!row.gender || !['Nam', 'Nữ', 'Khác'].includes(row.gender)) {
+    errors.push("Giới tính phải là Nam, Nữ hoặc Khác");
   }
 
   return {
@@ -353,8 +353,8 @@ const validateDoctorRow = (row, rowNumber) => {
     }
   }
 
-  if (!row.gender || !['male', 'female', 'other'].includes(row.gender.toLowerCase())) {
-    errors.push("Giới tính phải là male, female hoặc other");
+  if (!row.gender || !['Nam', 'Nữ', 'Khác'].includes(row.gender)) {
+    errors.push("Giới tính phải là Nam, Nữ hoặc Khác");
   }
 
   return {
@@ -878,6 +878,20 @@ const AdminController = {
           row.password = cleanField(row.password);
           row.dateOfBirth = cleanField(row.dateOfBirth);
           row.identityCard = cleanField(row.identityCard);
+          // Chuẩn hóa gender: loại bỏ khoảng trắng, ký tự nháy đơn, viết hoa chữ cái đầu
+          if (row.gender) {
+            let g = String(row.gender).replace(/^'+|'+$/g, '').trim().toLowerCase();
+            if (g === 'nam' || g === 'male') row.gender = 'Nam';
+            else if (g === 'nữ' || g === 'nu' || g === 'female') row.gender = 'Nữ';
+            else if (g === 'khác' || g === 'other') row.gender = 'Khác';
+            else {
+              // Chỉ lấy đúng enum: Nam, Nữ, Khác
+              if (g === 'nam') row.gender = 'Nam';
+              else if (g === 'nữ') row.gender = 'Nữ';
+              else if (g === 'khác') row.gender = 'Khác';
+              else row.gender = g.charAt(0).toUpperCase() + g.slice(1);
+            }
+          }
 
           // Validate dữ liệu
           const validation = validateSupporterRow(row, rowNumber);
@@ -960,7 +974,7 @@ const AdminController = {
           // Tạo user qua setter để plugin hoạt động
           const user = new User();
           user.fullName = row.fullName.trim();
-          user.gender = row.gender.toLowerCase();
+          user.gender = row.gender;
           user.password = hashedPassword;
           user.role = "supporter";
           user.isActive = true;
@@ -1038,6 +1052,20 @@ const AdminController = {
           row.password = cleanField(row.password);
           row.dateOfBirth = cleanField(row.dateOfBirth);
           row.identityCard = cleanField(row.identityCard);
+          // Chuẩn hóa gender: loại bỏ khoảng trắng, ký tự nháy đơn, viết hoa chữ cái đầu
+          if (row.gender) {
+            let g = String(row.gender).replace(/^'+|'+$/g, '').trim().toLowerCase();
+            if (g === 'nam' || g === 'male') row.gender = 'Nam';
+            else if (g === 'nữ' || g === 'nu' || g === 'female') row.gender = 'Nữ';
+            else if (g === 'khác' || g === 'other') row.gender = 'Khác';
+            else {
+              // Chỉ lấy đúng enum: Nam, Nữ, Khác
+              if (g === 'nam') row.gender = 'Nam';
+              else if (g === 'nữ') row.gender = 'Nữ';
+              else if (g === 'khác') row.gender = 'Khác';
+              else row.gender = g.charAt(0).toUpperCase() + g.slice(1);
+            }
+          }
 
           // Validate dữ liệu
           const validation = validateDoctorRow(row, rowNumber);
@@ -1120,7 +1148,7 @@ const AdminController = {
           // Tạo user qua setter để plugin hoạt động
           const user = new User();
           user.fullName = row.fullName.trim();
-          user.gender = row.gender.toLowerCase();
+          user.gender = row.gender;
           user.password = hashedPassword;
           user.role = "doctor";
           user.isActive = true;
@@ -1357,7 +1385,6 @@ const AdminController = {
   // Admin: Dashboard stats
   getDashboard: async (req, res) => {
     try {
-      const Payment = require("../models/Payment");
 
       // Counts by role
       const [totalResidents, familyMembers, activeSupporters, doctors, admins] = await Promise.all([
