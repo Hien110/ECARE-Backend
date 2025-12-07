@@ -5,7 +5,7 @@ const SupporterProfile = require("../models/SupporterProfile");
 const SupporterScheduling = require("../models/SupporterScheduling");
 // Đảm bảo HealthPackage được require trước RegistrationHealthPackage để model được đăng ký
 const HealthPackage = require("../models/HealthPackage");
-const RegistrationHealthPackage = require("../models/RegistrationHealthPackage");
+const RegistrationHealthPackage = require("../models/RegistrationConsulation");
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
 const XLSX = require('xlsx');
@@ -17,7 +17,7 @@ if (!mongoose.models.HealthPackage) {
 }
 if (!mongoose.models.RegistrationHealthPackage) {
   console.warn('⚠️ RegistrationHealthPackage model chưa được đăng ký, đang thử require lại...');
-  require("../models/RegistrationHealthPackage");
+  require("../models/RegistrationConsulation");
 }
 
 // === Helper kiểm tra ObjectId hợp lệ ===

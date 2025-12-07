@@ -8,7 +8,7 @@ const HealthPackage = require("../models/HealthPackage");
 const DoctorProfile = require("../models/DoctorProfile");
 const Consultation = require("../models/Consultation");
 const Payment = require("../models/Payment");
-const RegistrationHealthPackage = require("../models/RegistrationHealthPackage");
+const RegistrationHealthPackage = require("../models/RegistrationConsulation");
 const Conversation = require("../models/Conversation"); // ⬅️ THÊM DÒNG NÀY
 
 // helper: lấy userId từ req.user (_id / id / userId):
