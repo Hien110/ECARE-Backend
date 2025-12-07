@@ -9,69 +9,17 @@ const doctorProfileSchema = new mongoose.Schema(
       unique: true,
     },
     // Thông tin chuyên môn
-    specializations: {
-      type: String,
-      required: true,
+    specialization: {
+      type: String
     },
     // Kinh nghiệm
     experience: {
       type: Number,
       required: true,
     },
-    // Nơi làm việc hiện tại
-    hospitalName: {
-      type: String,
-      required: true,
 
-    },
-    // Lịch làm việc và tư vấn
-    schedule: [
-      {
-        dayOfWeek: {
-          type: Number,
-          required: true,
-          min: 2,
-          max: 8,
-        },
-        timeSlots: [
-          {
-            start: {
-              type: String,
-              required: true,
-            },
-            end: {
-              type: String,
-              required: true,
-            },
-            consultationType: {
-              type: String,
-              enum: ["online", "offline", "both"],
-              required: true,
-            },
-            timeForOnline: {
-              type: Number,
-            },
-            timeForOffline: {
-              type: Number,
-            },
-            isAvailable: {
-              type: Boolean,
-              default: true,
-            },
-          },
-        ],
-      },
-    ],
-    // Phí tư vấn
-    consultationFees: {
-      online: {
-        type: Number,
-        required: true,
-      },
-      offline: {
-        type: Number,
-        required: true,
-      },
+    description: {
+      type: String,
     },
     // Thống kê đánh giá (tự động tính từ bảng Rating)
     ratingStats: {
@@ -92,22 +40,7 @@ const doctorProfileSchema = new mongoose.Schema(
       totalConsultations: {
         type: Number,
         default: 0,
-      },
-      totalPatients: {
-        type: Number,
-        default: 0,
-      },
-      averageConsultationDuration: Number, // phút
-      totalEarnings: {
-        type: Number,
-        default: 0,
-      },
-      lastConsultationDate: Date,
-    },
-    // Cài đặt tư vấn
-    consultationDuration: {
-      type: Number,
-      default: 30, // phút
+      }
     },
   },
   {
