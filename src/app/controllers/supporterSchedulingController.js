@@ -24,317 +24,103 @@ const toPlain = (doc) => JSON.parse(JSON.stringify(doc));
 const schedulingController = {
   /**
    * POST /api/schedulings
-   * Body (tuỳ bookingType):
-   * - Common: supporter, elderly, createdBy, service, address?, notes?, paymentStatus?
-   * - session: scheduleDate (YYYY-MM-DD), scheduleTime ('morning'|'afternoon'|'evening')
-   * - day:     scheduleDate (YYYY-MM-DD)
-   * - month:   monthStart (YYYY-MM-DD), monthEnd? (auto 30d nếu không gửi), monthSessionsPerDay? (lấy từ service)
+   * Body: {
+   *   supporter, elderly, registrant, service, startDate, endDate,
+   *   paymentMethod?, paymentStatus?, notes?, address?, price?
+   * }
    */
-createScheduling: async (req, res) => {
-  const TAG = "[SupporterScheduling][create]";
-  try {
-    const schedulingData = req.body || {};
-    const {
-      supporter,
-      elderly,
-      createdBy,
-      service,
-      address,
-      notes,
-      paymentStatus, // 'unpaid'|'paid'|'refunded' (tuỳ FE)
-      paymentMethod, // 'cash'|'bank_transfer' (nếu FE gửi)
-      bookingType, // 'session'|'day'|'month'
-      scheduleDate,
-      scheduleTime,
-      monthStart,
-      monthEnd,
-      monthSessionsPerDay, // FE có thể không gửi: lấy từ service
-    } = schedulingData || {};
+  createScheduling: async (req, res) => {
+    const TAG = "[SupporterScheduling][create]";
+    try {
+      const schedulingData = req.body || {};
+      const {
+        supporter,
+        elderly,
+        registrant,
+        service,
+        startDate,
+        endDate,
+        paymentMethod = "cash",
+        paymentStatus = "unpaid",
+        notes = "",
+        address = "",
+        price,
+      } = schedulingData || {};
 
-    // Bắt các field bắt buộc tối thiểu theo yêu cầu business
-    if (!supporter || !elderly || !createdBy || !service || !bookingType) {
-      return res.status(400).json({
+      // Validation các field bắt buộc
+      if (!supporter || !elderly || !service || !startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu thông tin bắt buộc (supporter, elderly, service, startDate, endDate)",
+        });
+      }
+
+      // Validate dates
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Ngày không hợp lệ",
+        });
+      }
+
+      if (end < start) {
+        return res.status(400).json({
+          success: false,
+          message: "Ngày kết thúc phải sau ngày bắt đầu",
+        });
+      }
+
+      // Verify service exists
+      const svc = await SupporterService.findById(service).lean();
+      if (!svc) {
+        return res.status(400).json({
+          success: false,
+          message: "Dịch vụ không tồn tại",
+        });
+      }
+
+      // Create scheduling
+      const payload = {
+        supporter,
+        elderly,
+        registrant: registrant || supporter,
+        service,
+        startDate: start,
+        endDate: end,
+        paymentMethod,
+        paymentStatus,
+        notes: notes?.trim() || "",
+        price: price || svc.price || 0,
+        status: "pending",
+      };
+
+      if (address?.trim()) {
+        payload.address = encryptField(address.trim());
+      }
+
+      const created = await SupporterScheduling.create(payload);
+      const plain = toPlain(created);
+
+      return res.status(201).json({
+        success: true,
+        message: "Tạo lịch hỗ trợ thành công",
+        data: plain,
+      });
+    } catch (error) {
+      console.error(`${TAG} Error:`, error);
+      return res.status(500).json({
         success: false,
-        message:
-          "Thiếu thông tin bắt buộc (supporter, elderly, createdBy, service, bookingType).",
+        message: "Tạo lịch hỗ trợ thất bại",
+        error: error?.message || error,
       });
     }
-
-    // Tối thiểu cần địa chỉ để di chuyển (theo form của bạn)
-    if (!address) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Thiếu địa chỉ (address)." });
-    }
-
-    // Tải service để snapshot giá + cấu hình
-    const svc = await SupporterService.findById(service).lean();
-
-    if (!svc || !svc.isActive) {
-      return res.status(400).json({
-        success: false,
-        message: "Dịch vụ không tồn tại hoặc đang tắt.",
-      });
-    }
-
-    // Tính priceAtBooking + chuẩn bị payload theo bookingType
-    let priceAtBooking = 0;
-    const serviceSnapshot = {
-      name: svc.name,
-      bySession: {
-        morning: svc?.bySession?.morning ?? 0,
-        afternoon: svc?.bySession?.afternoon ?? 0,
-        evening: svc?.bySession?.evening ?? 0,
-      },
-      byDay: { dailyFee: svc?.byDay?.dailyFee ?? 0 },
-      byMonth: {
-        monthlyFee: svc?.byMonth?.monthlyFee ?? 0,
-        sessionsPerDay: Array.isArray(svc?.byMonth?.sessionsPerDay)
-          ? [...svc.byMonth.sessionsPerDay]
-          : [],
-      },
-    };
-
-    const basePayload = {
-      supporter,
-      elderly,
-      createdBy,
-      service,
-      notes: notes || "",
-      paymentStatus: paymentStatus || "unpaid",
-      paymentMethod: paymentMethod || "cash",
-      address: encryptField(address.trim()),
-      bookingType,
-      serviceSnapshot,
-      status: "confirmed", // ✅ luôn ở trạng thái đã xác nhận sau khi đặt lịch
-    };
-
-    if (bookingType === "session") {
-      if (!scheduleDate || !scheduleTime) {
-        return res.status(400).json({
-          success: false,
-          message: "Thiếu scheduleDate hoặc scheduleTime cho gói theo buổi.",
-        });
-      }
-      // snapshot giá
-      priceAtBooking =
-        scheduleTime === "morning"
-          ? serviceSnapshot.bySession.morning
-          : scheduleTime === "afternoon"
-          ? serviceSnapshot.bySession.afternoon
-          : serviceSnapshot.bySession.evening;
-
-      basePayload.scheduleDate = scheduleDate;
-      basePayload.scheduleTime = scheduleTime;
-      basePayload.priceAtBooking = priceAtBooking;
-    } else if (bookingType === "day") {
-      if (!scheduleDate) {
-        return res.status(400).json({
-          success: false,
-          message: "Thiếu scheduleDate cho gói theo ngày.",
-        });
-      }
-      priceAtBooking = serviceSnapshot.byDay.dailyFee || 0;
-
-      basePayload.scheduleDate = scheduleDate;
-      basePayload.priceAtBooking = priceAtBooking;
-    } else if (bookingType === "month") {
-      if (!monthStart) {
-        return res.status(400).json({
-          success: false,
-          message: "Thiếu monthStart cho gói theo tháng.",
-        });
-      }
-      // Nếu FE không gửi monthEnd → auto 30 ngày (start + 29)
-      const _monthStart = new Date(monthStart);
-      const _monthEnd = monthEnd
-        ? new Date(monthEnd)
-        : addDays(_monthStart, 29);
-
-      // Buổi áp dụng mỗi ngày: nếu FE không gửi, lấy từ service
-      const sessionsDaily =
-        Array.isArray(monthSessionsPerDay) && monthSessionsPerDay.length > 0
-          ? monthSessionsPerDay
-          : serviceSnapshot.byMonth.sessionsPerDay;
-
-      basePayload.monthStart = _monthStart;
-      basePayload.monthEnd = _monthEnd;
-      basePayload.monthSessionsPerDay = sessionsDaily;
-
-      priceAtBooking = serviceSnapshot.byMonth.monthlyFee || 0;
-      basePayload.priceAtBooking = priceAtBooking;
-    } else {
-      return res
-        .status(400)
-        .json({ success: false, message: "bookingType không hợp lệ." });
-    }
-
-    const created = await SupporterScheduling.create(basePayload);
-
-    // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION ==================
-    const payStatusLower = (basePayload.paymentStatus || "").toLowerCase();
-
-    if (payStatusLower === "paid" || payStatusLower === "unpaid") {
-      try {
-        // Lấy role của người tạo và elderly
-        const [elderlyUser, creatorUser] = await Promise.all([
-          User.findById(elderly).select("role"),
-          User.findById(createdBy).select("role"),
-        ]);
-
-        if (elderlyUser && creatorUser) {
-          const creatorRole = creatorUser.role;
-
-          // Hàm nhỏ tạo/accept 1 relationship + đảm bảo có Conversation 1–1
-          const ensureAcceptedSupporterRelationshipInline = async (
-            elderlyId,
-            supporterId,
-            options = {}
-          ) => {
-            const { relationshipLabel = "Người hỗ trợ" } = options || {};
-            if (!elderlyId || !supporterId) {
-              return null;
-            }
-
-            const filter = { elderly: elderlyId, family: supporterId };
-
-            let rel = await Relationship.findOne(filter);
-            if (rel) {
-              let changed = false;
-              if (rel.status !== "accepted") {
-                rel.status = "accepted";
-                rel.respondedAt = new Date();
-                changed = true;
-              }
-              if (rel.relationship !== relationshipLabel) {
-                rel.relationship = relationshipLabel;
-                changed = true;
-              }
-              // Với "Người hỗ trợ" thì requestedBy phải là chính supporter
-              if (
-                relationshipLabel === "Người hỗ trợ" &&
-                String(rel.requestedBy) !== String(supporterId)
-              ) {
-                rel.requestedBy = supporterId;
-                changed = true;
-              }
-
-              if (changed) {
-                await rel.save();
-              }
-
-              // Đảm bảo có conversation 1–1 giữa elderly & supporter
-              let conv = await Conversation.findOne({
-                isActive: true,
-                $and: [
-                  { participants: { $elemMatch: { user: elderlyId } } },
-                  { participants: { $elemMatch: { user: supporterId } } },
-                ],
-                "participants.2": { $exists: false }, // chỉ 2 người
-              });
-
-              if (!conv) {
-                conv = new Conversation({
-                  participants: [
-                    { user: elderlyId },
-                    { user: supporterId },
-                  ],
-                  isActive: true,
-                });
-                await conv.save();
-              }
-
-              return { relationship: rel, conversation: conv };
-            }
-
-            // Chưa có relationship → tạo mới accepted
-            rel = new Relationship({
-              elderly: elderlyId,
-              family: supporterId,
-              relationship: relationshipLabel,
-              status: "accepted",
-              requestedBy: supporterId,
-              respondedAt: new Date(),
-            });
-
-            await rel.save();
-
-            // Tạo luôn conversation mới
-            let conv = new Conversation({
-              participants: [
-                { user: elderlyId },
-                { user: supporterId },
-              ],
-              isActive: true,
-            });
-            await conv.save();
-
-            return { relationship: rel, conversation: conv };
-          };
-
-          if (creatorRole === "family") {
-            // CASE 1: Người thân đặt gói hỗ trợ cho người cao tuổi
-            const familyId = createdBy;
-
-            // Lấy tất cả elderly đang connect accepted với family này
-            const acceptedRels = await Relationship.find({
-              family: familyId,
-              status: "accepted",
-            }).select("elderly");
-
-            const elderlySet = new Set();
-            acceptedRels.forEach((rel) => {
-              if (rel.elderly) elderlySet.add(String(rel.elderly));
-            });
-            // Đảm bảo có elderly hiện tại trong booking
-            elderlySet.add(String(elderly));
-
-            const elderlyIds = Array.from(elderlySet);
-
-            for (const eid of elderlyIds) {
-              await ensureAcceptedSupporterRelationshipInline(eid, supporter, {
-                relationshipLabel: "Người hỗ trợ",
-              });
-            }
-          } else if (creatorRole === "elderly") {
-            // CASE 2: Người cao tuổi tự đặt gói hỗ trợ
-            await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
-              relationshipLabel: "Người hỗ trợ",
-            });
-          } else {
-            // CASE 3: Vai trò khác (admin, supporter tự đặt hộ, ...) → ít nhất connect elderly hiện tại
-            await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
-              relationshipLabel: "Người hỗ trợ",
-            });
-          }
-        }
-      } catch (autoErr) {
-        // nuốt lỗi auto-connect, tránh làm fail booking
-      }
-    }
-    // ================== HẾT PHẦN AUTO KẾT NỐI ==================
-
-    // Trả bản sao đã giải mã address để FE hiển thị
-    const plain = toPlain(created);
-    if (plain.address) {
-      plain.address = tryDecryptField(plain.address);
-    }
-
-    return res
-      .status(201)
-      .json({ success: true, message: "Đặt lịch thành công", data: plain });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Đặt lịch thất bại",
-      error: error?.message || error,
-    });
-  }
-},
+  },
 
   /**
    * GET /api/schedulings/by-user
-   * Query: userId, includeCanceled?=false, page=1, limit=20
+   * Query: userId, page=1, limit=20
    * -> Lịch của elderly (người được hỗ trợ)
    */
   getSchedulingsByUserId: async (req, res) => {
@@ -362,7 +148,8 @@ createScheduling: async (req, res) => {
           .limit(Number(limit))
           .populate("supporter", projectUser)
           .populate("elderly", projectUser)
-          .populate("createdBy", projectUser)
+          .populate("registrant", projectUser)
+          .populate("service", "name price numberOfDays")
           .lean(),
         SupporterScheduling.countDocuments(query),
       ]);
@@ -437,7 +224,8 @@ createScheduling: async (req, res) => {
           .limit(Number(limit))
           .populate("supporter", projectUser)
           .populate("elderly", projectUser)
-          .populate("createdBy", projectUser)
+          .populate("registrant", projectUser)
+          .populate("service", "name price numberOfDays")
           .lean(),
         SupporterScheduling.countDocuments(query),
       ]);
@@ -491,20 +279,18 @@ createScheduling: async (req, res) => {
     try {
       const schedulingId = req.params.id;
 
-      // Populate supporter, elderly, and createdBy với các trường mã hóa từ User
+      // Populate supporter, elderly, createdBy, and service
       const scheduling = await SupporterScheduling.findById(schedulingId)
         .populate(
           "supporter",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
-        ) // Populate các trường mã hóa từ User
+        )
         .populate(
           "elderly",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar"
-        ) // Populate elderly nếu có
-        .populate(
-          "createdBy",
-          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
-        ) // Populate createdBy nếu có
+        )
+        .populate("registrant", "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar")
+        .populate("service", "name price numberOfDays")
         .lean();
 
       if (!scheduling) {
@@ -578,23 +364,15 @@ createScheduling: async (req, res) => {
       const emailElderly = scheduling?.elderly?.emailEnc
         ? tryDecryptAny(scheduling?.elderly?.emailEnc)
         : "";
-      const phoneNumberCreatedBy = scheduling?.createdBy?.phoneNumberEnc
-        ? tryDecryptAny(scheduling?.createdBy?.phoneNumberEnc)
-        : "";
-      const emailCreatedBy = scheduling?.createdBy?.emailEnc
-        ? tryDecryptAny(scheduling?.createdBy?.emailEnc)
-        : "";
 
-      // Tạo response với
+      // Tạo response
       const responseScheduling = {
         ...scheduling,
-        address: addressDecrypted, // Giải mã address bằng tryDecryptField
+        address: addressDecrypted,
         phoneNumberSupporter: phoneNumberSupporter,
         emailSupporter: emailSupporter,
         phoneNumberElderly: phoneNumberElderly,
         emailElderly: emailElderly,
-        phoneNumberCreatedBy: phoneNumberCreatedBy,
-        emailCreatedBy: emailCreatedBy,
       };
 
       // Dọn rác (xóa các trường mã hóa khỏi kết quả trả về)
@@ -718,13 +496,13 @@ createScheduling: async (req, res) => {
           .limit(Number(limit))
           .populate("supporter", projectUser)
           .populate("elderly", projectUser)
-          .populate("createdBy", projectUser)
+          .populate("registrant", projectUser)
+          .populate("service", "name price numberOfDays")
           .lean(),
         SupporterScheduling.countDocuments(),
       ]);
       const data = items.map((it) => ({
         ...it,
-        address: it.address ? tryDecryptField(it.address) : "",
       }));
       return res.status(200).json({
         success: true,
