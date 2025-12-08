@@ -13,12 +13,6 @@ const supporterProfileSchema = new mongoose.Schema(
       totalYears: Number,
       description: String,
     },
-    // Phạm vi hoạt động
-    serviceArea: {
-      type: Number,
-      default: 10, // km
-      max: 50,
-    },
     // Thống kê đánh giá (tự động tính từ bảng Rating)
     ratingStats: {
       averageRating: {

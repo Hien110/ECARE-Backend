@@ -7,7 +7,8 @@ const supporterServiceSchema = new Schema(
     name: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
+      index: true
     },
     description: {
       type: String, 
@@ -17,7 +18,8 @@ const supporterServiceSchema = new Schema(
     price: {
       type: Number,
       required: true,
-      min: 0
+      min: 0,
+      index: true
     },
     numberOfDays: {
       type: Number,
@@ -27,5 +29,8 @@ const supporterServiceSchema = new Schema(
   },
   { timestamps: true }
 );
+
+// Tạo index composite cho tìm kiếm nhanh
+supporterServiceSchema.index({ name: 1, price: 1 });
 
 module.exports = mongoose.model("SupporterService", supporterServiceSchema);
