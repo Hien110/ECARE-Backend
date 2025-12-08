@@ -118,6 +118,49 @@ exports.getUserTokens = async (req, res) => {
 };
 
 /**
+ * Logout - xóa tất cả FCM tokens của user
+ */
+exports.logout = async (req, res) => {
+  try {
+    console.log('👋 logout called');
+    const userId = req.user._id || req.user.userId;
+    const { token } = req.body;
+
+    console.log('User ID:', userId);
+    console.log('Token provided:', !!token);
+
+    const User = require('../models/User');
+
+    if (token) {
+      // Xóa token cụ thể
+      await User.findByIdAndUpdate(userId, {
+        $pull: { 
+          fcmTokens: { token } 
+        }
+      });
+      console.log('✅ Specific FCM token removed');
+    } else {
+      // Xóa tất cả tokens
+      await User.findByIdAndUpdate(userId, {
+        $set: { fcmTokens: [] }
+      });
+      console.log('✅ All FCM tokens removed for user:', userId);
+    }
+
+    res.json({
+      success: true,
+      message: 'Logout successful - FCM tokens cleared'
+    });
+  } catch (error) {
+    console.error('❌ Error in logout:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+/**
  * Test gửi notification (gửi đến tất cả users hoặc recipients cụ thể)
  */
 exports.testNotification = async (req, res) => {
