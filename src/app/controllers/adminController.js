@@ -3,7 +3,7 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
 const SupporterScheduling = require("../models/SupporterScheduling");
-const RegistrationHealthPackage = require("../models/RegistrationConsulation");
+const RegistrationConsulation = require("../models/RegistrationConsulation");
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
 const XLSX = require('xlsx');9
@@ -1183,32 +1183,36 @@ const AdminController = {
   // Admin: Lấy danh sách các đăng ký gói khám (mặc định chỉ các đăng ký có beneficiary là người già)
   getRegisteredPackages: async (req, res) => {
     try {
-      // Models đã được require ở đầu file, không cần require lại
-
       const page = Math.max(1, parseInt(req.query.page || '1'));
       const limit = Math.max(1, Math.min(100, parseInt(req.query.limit || '20')));
       const skip = (page - 1) * limit;
-      const { beneficiaryId } = req.query; // optional filter for a specific elderly id
+      const { beneficiaryId, doctorId, status } = req.query;
 
       const query = {};
       if (beneficiaryId) {
-        if (!isValidObjectId(beneficiaryId)) return res.status(400).json({ success: false, message: "ID beneficiary không hợp lệ" });
+        if (!isValidObjectId(beneficiaryId)) return res.status(400).json({ success: false, message: "ID người hưởng không hợp lệ" });
         query.beneficiary = beneficiaryId;
       }
+      if (doctorId) {
+        if (!isValidObjectId(doctorId)) return res.status(400).json({ success: false, message: "ID bác sĩ không hợp lệ" });
+        query.doctor = doctorId;
+      }
+      if (status) {
+        query.status = status;
+      }
 
-      // Fetch registrations with populated references - populate đầy đủ các fields cần thiết cho decrypt
-      let docs = await RegistrationHealthPackage.find(query)
-        .populate('packageRef', 'title durationDays price description isActive')
+      // Fetch consultations with populated references
+      let docs = await RegistrationConsulation.find(query)
         .populate({
-          path: 'beneficiary',
-          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc avatar +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc'
-        })
-        .populate({
-          path: 'registrant',
+          path: 'doctor',
           select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
         })
         .populate({
-          path: 'doctor',
+          path: 'beneficiary',
+          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc address addressEnc avatar +phoneNumberEnc +emailEnc +addressEnc'
+        })
+        .populate({
+          path: 'registrant',
           select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
         })
         .sort({ registeredAt: -1 })
@@ -1216,32 +1220,10 @@ const AdminController = {
         .limit(limit)
         .lean();
 
-      // If beneficiaryId not given, only include registrations where the beneficiary's role === 'elderly'
-      if (!beneficiaryId) {
-        docs = docs.filter(d => d.beneficiary && d.beneficiary.role === 'elderly');
-      }
+      // Count total
+      const total = await RegistrationConsulation.countDocuments(query);
 
-      // Count total (respecting beneficiary filter). For global count of elderly registrations use aggregation
-      let total = 0;
-      if (beneficiaryId) {
-        total = await RegistrationHealthPackage.countDocuments(query);
-      } else {
-        try {
-          const agg = await RegistrationHealthPackage.aggregate([
-            { $lookup: { from: 'users', localField: 'beneficiary', foreignField: '_id', as: 'beneficiaryDoc' } },
-            { $unwind: '$beneficiaryDoc' },
-            { $match: { 'beneficiaryDoc.role': 'elderly' } },
-            { $count: 'total' }
-          ]);
-          total = (agg[0] && agg[0].total) || 0;
-        } catch (aggErr) {
-          console.error('❌ [AdminController.getRegisteredPackages] Aggregation error:', aggErr);
-          // Fallback to simple count if aggregation fails
-          total = await RegistrationHealthPackage.countDocuments(query);
-        }
-      }
-
-      // Decrypt populated users (beneficiary/registrant/doctor) in batch to avoid exposing encrypted fields
+      // Decrypt populated users in batch
       const usersToDecrypt = [];
       docs.forEach(d => {
         if (d.beneficiary && d.beneficiary._id) usersToDecrypt.push(d.beneficiary);
@@ -1286,7 +1268,7 @@ const AdminController = {
             return d;
           });
         } catch (decryptErr) {
-          // Continue without decryption if it fails - return data as-is
+          // Continue without decryption if it fails
         }
       }
 
@@ -1302,36 +1284,34 @@ const AdminController = {
     } catch (err) {
       return res.status(500).json({ 
         success: false, 
-        message: 'Đã xảy ra lỗi khi lấy danh sách gói khám đã đăng ký',
+        message: 'Đã xảy ra lỗi khi lấy danh sách lịch tư vấn',
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
   },
 
-  // Admin: Lấy chi tiết 1 đăng ký gói khám
+  // Admin: Lấy chi tiết 1 lịch tư vấn
   getRegisteredPackageById: async (req, res) => {
     try {
       const { id } = req.params;
-      if (!isValidObjectId(id)) return res.status(400).json({ success: false, message: 'ID đăng ký không hợp lệ' });
+      if (!isValidObjectId(id)) return res.status(400).json({ success: false, message: 'ID lịch tư vấn không hợp lệ' });
 
-      // Models đã được require ở đầu file, không cần require lại
-      const doc = await RegistrationHealthPackage.findById(id)
-        .populate('packageRef', 'title durationDays price description isActive')
+      const doc = await RegistrationConsulation.findById(id)
+        .populate({
+          path: 'doctor',
+          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
         .populate({
           path: 'beneficiary',
-          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc avatar +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc'
+          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc address addressEnc avatar +phoneNumberEnc +emailEnc +addressEnc'
         })
         .populate({
           path: 'registrant',
           select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
         })
-        .populate({
-          path: 'doctor',
-          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
-        })
         .lean();
 
-      if (!doc) return res.status(404).json({ success: false, message: 'Không tìm thấy đăng ký gói khám' });
+      if (!doc) return res.status(404).json({ success: false, message: 'Không tìm thấy lịch tư vấn' });
 
       // Decrypt any populated user objects
       const users = [];
@@ -1348,6 +1328,7 @@ const AdminController = {
               decMap[String(u._id)] = u;
             }
           });
+
           if (doc.beneficiary && doc.beneficiary._id && decMap[String(doc.beneficiary._id)]) {
             doc.beneficiary = decMap[String(doc.beneficiary._id)];
           }
@@ -1366,13 +1347,11 @@ const AdminController = {
     } catch (err) {
       return res.status(500).json({ 
         success: false, 
-        message: 'Đã xảy ra lỗi khi lấy chi tiết đăng ký gói khám',
+        message: 'Đã xảy ra lỗi khi lấy chi tiết lịch tư vấn',
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
-  }
-
-  ,
+  },
 
   // Admin: Dashboard stats
   getDashboard: async (req, res) => {
