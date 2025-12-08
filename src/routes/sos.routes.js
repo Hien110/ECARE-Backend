@@ -38,6 +38,14 @@ router.get('/fcm/tokens', authMiddleware, fcmController.getUserTokens);
  */
 router.post('/fcm/test', authMiddleware, fcmController.testNotification);
 
+/**
+ * @route   POST /api/sos/logout
+ * @desc    Logout - xóa tất cả FCM tokens của user
+ * @body    { token?: string } (token optional - nếu có thì xóa cái đó, không thì xóa tất cả)
+ * @access  Private
+ */
+router.post('/logout', authMiddleware, fcmController.logout);
+
 // ============= SOS ROUTES =============
 
 /**
