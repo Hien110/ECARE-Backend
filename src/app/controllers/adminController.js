@@ -3,18 +3,12 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
 const SupporterScheduling = require("../models/SupporterScheduling");
-// Đảm bảo HealthPackage được require trước RegistrationHealthPackage để model được đăng ký
-const HealthPackage = require("../models/HealthPackage");
 const RegistrationHealthPackage = require("../models/RegistrationConsulation");
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
-const XLSX = require('xlsx');
+const XLSX = require('xlsx');9
 const Payment = require("../models/Payment");
-// Đảm bảo models đã được đăng ký
-if (!mongoose.models.HealthPackage) {
-  console.warn('⚠️ HealthPackage model chưa được đăng ký, đang thử require lại...');
-  require("../models/HealthPackage");
-}
+
 if (!mongoose.models.RegistrationHealthPackage) {
   console.warn('⚠️ RegistrationHealthPackage model chưa được đăng ký, đang thử require lại...');
   require("../models/RegistrationConsulation");
@@ -23,9 +17,7 @@ if (!mongoose.models.RegistrationHealthPackage) {
 // === Helper kiểm tra ObjectId hợp lệ ===
 const isValidObjectId = (v) => typeof v === "string" && /^[a-fA-F0-9]{24}$/.test(v);
 
-/* ===========================================================
-   🔐 Giải mã dữ liệu người dùng (đồng bộ với userController.js)
-   =========================================================== */
+
 const decryptUserData = (users) => {
   try {
     const ENC_KEY = Buffer.from(process.env.ENC_KEY || '', 'base64');
