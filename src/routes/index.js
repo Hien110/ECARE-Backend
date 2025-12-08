@@ -7,6 +7,7 @@ const adminRoutes = require('./admin.routes');
 const healthRecordRoutes = require('./healthRecord.routes');
 const doctorRoutes = require('./doctor.routes');
 const ratingRoutes = require('./rating.routes');
+const doctorBookingRoutes = require('./doctorBooking.routes');
 
 const supporterSchedulingRoutes = require('./supporterScheduling.routes');
 const sosRoutes = require('./sos.routes');
@@ -28,6 +29,7 @@ function route(app) {
     app.use('/api/health-records', healthRecordRoutes);
 
     app.use('/api/doctors', doctorRoutes);
+    app.use('/api/doctor-booking', doctorBookingRoutes);
     app.use('/api/ratings', ratingRoutes);
 
     app.use('/api/supporter-schedulings', supporterSchedulingRoutes);
