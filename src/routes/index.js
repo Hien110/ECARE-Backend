@@ -16,8 +16,6 @@ const deadmanRoutes = require('./deadman.routes');
 
 const supporterServiceRoutes = require('./supporterServices.routes');
 const transcribetionRoutes = require('./transcription.routes');
-const healthPackageRoutes = require('./healthPackage.routes');
-const doctorBookingRoutes = require('./doctorBooking.routes');
 
 const payOsRoutes = require('./payos');
 function route(app) {
@@ -42,8 +40,6 @@ function route(app) {
     app.use('/api/supporter-services', supporterServiceRoutes);
 
     app.use('/api/transcriptions', transcribetionRoutes);
-    app.use('/api/health-packages', healthPackageRoutes);
-    app.use('/api/doctor-booking', doctorBookingRoutes);
 
     app.use('/api/payos', payOsRoutes);
 }
