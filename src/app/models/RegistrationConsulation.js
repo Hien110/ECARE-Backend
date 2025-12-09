@@ -7,7 +7,6 @@ const RegistrationConsulationSchema = new mongoose.Schema({
   registeredAt: { type: Date, default: Date.now },
   durationDays: { type: Number, default: 7 },
   price: { type: Number, default: 200000 },
-  doctorNote: { type: String },
   status: {
     type: String,
     enum: [ 'confirmed', 'completed', 'cancelled'],
