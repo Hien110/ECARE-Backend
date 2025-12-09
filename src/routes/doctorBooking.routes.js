@@ -4,7 +4,6 @@ const router = express.Router();
 const DoctorBookingController = require("../app/controllers/doctorBookingController");
 const authenticateToken = require("../app/middlewares/authMiddleware");
 
-// Tất cả API dưới đây đều yêu cầu đăng nhập
 router.use(authenticateToken);
 
 router.get("/elderlies", DoctorBookingController.getConnectedElderlies);

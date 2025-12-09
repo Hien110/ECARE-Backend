@@ -7,6 +7,7 @@ const DoctorProfile = require("../models/DoctorProfile");
 const Payment = require("../models/Payment");
 const RegistrationConsulation = require("../models/RegistrationConsulation");
 const ConsultationPrice = require("../models/ConsultationPrice");
+const Conversation = require("../models/Conversation");
 
 function getUserIdFromReq(req) {
   if (!req || !req.user) return null;
@@ -148,6 +149,14 @@ const DoctorBookingController = {
       const result = [];
       const dayCursor = new Date(startDay);
 
+      // Lấy thời gian hiện tại theo giờ hệ thống server.
+      // Giả định server đang dùng giờ VN hoặc đã được cấu hình đúng.
+      const now = new Date();
+
+      // Đặt lịch phải trước giờ bắt đầu mỗi slot ít nhất 30 phút
+      const LIMIT_MINUTES = 30;
+      const LIMIT_MS = LIMIT_MINUTES * 60 * 1000;
+
       while (dayCursor <= endDay) {
         const dayKey = dayCursor.toISOString().slice(0, 10);
         const busy = busyByDay.get(dayKey) || { morning: false, afternoon: false };
@@ -160,11 +169,15 @@ const DoctorBookingController = {
           start.setHours(8, 0, 0, 0);
           const end = new Date(dayCursor);
           end.setHours(10, 0, 0, 0);
-          freeSlots.push({
-            slot: "morning",
-            start,
-            end,
-          });
+
+          // Chỉ cho đặt nếu còn ít nhất 30 phút trước 8h
+          if (start.getTime() - now.getTime() >= LIMIT_MS) {
+            freeSlots.push({
+              slot: "morning",
+              start,
+              end,
+            });
+          }
         }
 
         // afternoon: 14h - 17h
@@ -173,11 +186,15 @@ const DoctorBookingController = {
           start.setHours(14, 0, 0, 0);
           const end = new Date(dayCursor);
           end.setHours(17, 0, 0, 0);
-          freeSlots.push({
-            slot: "afternoon",
-            start,
-            end,
-          });
+
+          // Chỉ cho đặt nếu còn ít nhất 30 phút trước 14h
+          if (start.getTime() - now.getTime() >= LIMIT_MS) {
+            freeSlots.push({
+              slot: "afternoon",
+              start,
+              end,
+            });
+          }
         }
 
         if (freeSlots.length) {
@@ -348,6 +365,88 @@ const DoctorBookingController = {
 
       await registration.save();
 
+      // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION VỚI BÁC SĨ ==================
+      try {
+        const doctorUserId = doctorId;
+
+        // Hàm nhỏ: đảm bảo có Conversation 1-1 giữa 2 user
+        const ensureOneToOneConversation = async (userA, userB) => {
+          if (!userA || !userB) return null;
+          if (String(userA) === String(userB)) return null;
+
+          let conv = await Conversation.findOne({
+            isActive: true,
+            $and: [
+              { participants: { $elemMatch: { user: userA } } },
+              { participants: { $elemMatch: { user: userB } } },
+            ],
+            "participants.2": { $exists: false },
+          });
+
+          if (!conv) {
+            conv = new Conversation({
+              participants: [{ user: userA }, { user: userB }],
+              isActive: true,
+            });
+            await conv.save();
+          }
+
+          return conv;
+        };
+
+        // Hàm nhỏ: tạo Relationship accepted giữa patient và doctor nếu chưa có
+        const ensureDoctorPatientRelationship = async (patientId) => {
+          if (!patientId || !doctorUserId) return null;
+          if (String(patientId) === String(doctorUserId)) return null;
+
+          const filter = {
+            elderly: patientId,
+            family: doctorUserId,
+          };
+
+          let rel = await Relationship.findOne(filter);
+          if (!rel) {
+            rel = new Relationship({
+              elderly: patientId,
+              family: doctorUserId,
+              relationship: "Bác sĩ",
+              status: "accepted",
+              requestedBy: doctorUserId,
+              respondedAt: new Date(),
+            });
+            await rel.save();
+          } else {
+            let changed = false;
+            if (rel.status !== "accepted") {
+              rel.status = "accepted";
+              rel.respondedAt = new Date();
+              changed = true;
+            }
+            if (rel.relationship !== "Bác sĩ") {
+              rel.relationship = "Bác sĩ";
+              changed = true;
+            }
+            if (changed) {
+              await rel.save();
+            }
+          }
+
+          await ensureOneToOneConversation(patientId, doctorUserId);
+          return rel;
+        };
+
+        // 1) Tạo/đảm bảo quan hệ & conversation giữa beneficiary (người được khám) và bác sĩ
+        await ensureDoctorPatientRelationship(elderlyId);
+
+        // 2) Nếu registrant khác beneficiary thì cũng tạo quan hệ & conversation giữa registrant và bác sĩ
+        if (String(registrantUserId) !== String(elderlyId)) {
+          await ensureDoctorPatientRelationship(registrantUserId);
+        }
+      } catch (autoErr) {
+        // Không để lỗi auto-connect làm fail việc tạo lịch
+      }
+      // ================== HẾT PHẦN AUTO KẾT NỐI ==================
+
       return res.status(201).json({
         success: true,
         data: registration,
@@ -473,7 +572,6 @@ const DoctorBookingController = {
       if (role === "doctor") {
         const doctorRegs = await RegistrationConsulation.find({
           doctor: userId,
-          isActive: true,
         })
           .populate({
             path: "doctor",
@@ -530,7 +628,7 @@ const DoctorBookingController = {
       }
 
   
-      const baseQuery = { isActive: true };
+      const baseQuery = {};
 
       if (role === "elderly") {
         baseQuery.$or = [{ registrant: userId }, { beneficiary: userId }];
