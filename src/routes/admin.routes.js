@@ -50,6 +50,7 @@ router.get("/dashboard", AdminController.getDashboard);
 router.get("/registered-packages", AdminController.getRegisteredPackages);
 router.post("/registered-packages/:registrationId/assign-doctor", AdminController.assignDoctorToRegistration);
 router.get("/registered-packages/:id", AdminController.getRegisteredPackageById);
+router.get("/consultation-schedules/beneficiary/:beneficiaryId", AdminController.getConsultationSchedulesByBeneficiary);
 
 // Admin: nearby doctors for elderly
 router.get("/nearby-doctors", AdminController.getNearbyDoctors);

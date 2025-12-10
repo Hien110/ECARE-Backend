@@ -18,6 +18,8 @@ const deadmanRoutes = require('./deadman.routes');
 const supporterServiceRoutes = require('./supporterServices.routes');
 const transcribetionRoutes = require('./transcription.routes');
 
+const consultationSummaryRoutes = require('./consultationSummary.routes');
+
 const payOsRoutes = require('./payos');
 function route(app) {
     app.use('/api/users', userRoutes);
@@ -44,6 +46,8 @@ function route(app) {
     app.use('/api/transcriptions', transcribetionRoutes);
 
     app.use('/api/payos', payOsRoutes);
+
+    app.use('/api/consultation-summaries', consultationSummaryRoutes);
 }
 
 module.exports = route;
