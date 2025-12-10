@@ -4,6 +4,7 @@ const User = require("../models/User");
 const SupporterProfile = require("../models/SupporterProfile");
 const SupporterScheduling = require("../models/SupporterScheduling");
 const RegistrationConsulation = require("../models/RegistrationConsulation");
+const ConsultationSummary = require("../models/ConsultationSummary");
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
 const XLSX = require('xlsx');9
@@ -1313,6 +1314,19 @@ const AdminController = {
 
       if (!doc) return res.status(404).json({ success: false, message: 'Không tìm thấy lịch tư vấn' });
 
+      // Lấy thông tin tư vấn từ ConsultationSummary
+      let doctorNote = '';
+      let consultationSummary = null;
+      try {
+        const summary = await ConsultationSummary.findOne({ registration: id }).lean();
+        if (summary) {
+          doctorNote = summary.note || '';
+          consultationSummary = summary;
+        }
+      } catch (summaryErr) {
+        console.warn('⚠️ Error fetching ConsultationSummary:', summaryErr.message);
+      }
+
       // Decrypt any populated user objects
       const users = [];
       if (doc.beneficiary && doc.beneficiary._id) users.push(doc.beneficiary);
@@ -1343,11 +1357,91 @@ const AdminController = {
         }
       }
 
+      // Thêm doctorNote và consultationSummary vào response
+      doc.doctorNote = doctorNote;
+      doc.consultationSummary = consultationSummary;
+
       return res.status(200).json({ success: true, data: doc });
     } catch (err) {
       return res.status(500).json({ 
         success: false, 
         message: 'Đã xảy ra lỗi khi lấy chi tiết lịch tư vấn',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    }
+  },
+
+  // Admin: Lấy danh sách lịch tư vấn của một người cao tuổi
+  getConsultationSchedulesByBeneficiary: async (req, res) => {
+    try {
+      const { beneficiaryId } = req.params;
+      if (!isValidObjectId(beneficiaryId)) {
+        return res.status(400).json({ success: false, message: 'ID người cao tuổi không hợp lệ' });
+      }
+
+      const schedules = await RegistrationConsulation.find({ beneficiary: beneficiaryId })
+        .populate({
+          path: 'doctor',
+          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
+        .populate({
+          path: 'registrant',
+          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
+        .sort({ scheduledDate: -1 })
+        .lean();
+
+      // Lấy ConsultationSummary cho mỗi lịch tư vấn
+      const schedulesWithSummary = await Promise.all(
+        schedules.map(async (schedule) => {
+          const summary = await ConsultationSummary.findOne({ registration: schedule._id }).lean();
+          return {
+            ...schedule,
+            consultationSummary: summary || null
+          };
+        })
+      );
+
+      // Decrypt user data
+      const users = [];
+      schedulesWithSummary.forEach((sch) => {
+        if (sch.doctor && sch.doctor._id) users.push(sch.doctor);
+        if (sch.registrant && sch.registrant._id) users.push(sch.registrant);
+      });
+
+      let decryptedUsers = [];
+      if (users.length > 0) {
+        try {
+          decryptedUsers = decryptUserData(users);
+        } catch (decryptErr) {
+          console.warn('⚠️ Error decrypting user data:', decryptErr.message);
+        }
+      }
+
+      const decMap = {};
+      decryptedUsers.forEach(u => {
+        if (u && u._id) {
+          decMap[String(u._id)] = u;
+        }
+      });
+
+      // Apply decrypted data
+      const finalSchedules = schedulesWithSummary.map(sch => {
+        const result = { ...sch };
+        if (sch.doctor && sch.doctor._id && decMap[String(sch.doctor._id)]) {
+          result.doctor = decMap[String(sch.doctor._id)];
+        }
+        if (sch.registrant && sch.registrant._id && decMap[String(sch.registrant._id)]) {
+          result.registrant = decMap[String(sch.registrant._id)];
+        }
+        return result;
+      });
+
+      return res.status(200).json({ success: true, data: finalSchedules });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: 'Đã xảy ra lỗi khi lấy danh sách lịch tư vấn',
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
