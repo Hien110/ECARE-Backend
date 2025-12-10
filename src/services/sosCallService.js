@@ -49,7 +49,8 @@ class SOSCallService {
         timeoutId: null,
         status: 'calling',
         startTime: Date.now(),
-        requester: sosNotification.requester
+        requester: sosNotification.requester,
+        loopCount: 0 // 🆕 Đếm số vòng lặp
       };
 
       this.activeSOSCalls.set(sosId, callSequence);
@@ -74,12 +75,19 @@ class SOSCallService {
         return;
       }
 
-      const { currentRecipientIndex, recipients, requester } = callSequence;
+      const { currentRecipientIndex, recipients, requester, loopCount } = callSequence;
 
-      // Kiểm tra xem đã gọi hết chưa
+      // 🆕 Kiểm tra xem đã gọi hết chưa → Bắt đầu vòng lặp mới
       if (currentRecipientIndex >= recipients.length) {
-        console.log('📞 All recipients called, no answer. Ending sequence.');
-        await this.endCallSequence(sosId, 'no_answer');
+        const newLoopCount = loopCount + 1;
+        console.log(`🔄 All recipients called (Loop ${loopCount}), no answer. Starting Loop ${newLoopCount}...`);
+        
+        // Reset index về 0 và tăng loopCount
+        callSequence.currentRecipientIndex = 0;
+        callSequence.loopCount = newLoopCount;
+        
+        // Gọi lại từ đầu
+        await this.callNextRecipient(sosId);
         return;
       }
 
@@ -100,7 +108,7 @@ class SOSCallService {
       const callId = `sos_call_${sosId}_${recipientId}_${Date.now()}`;
       callSequence.callId = callId;
 
-      console.log(`📞 Calling recipient ${currentRecipientIndex + 1}/${recipients.length}: ${recipient.fullName}`);
+      console.log(`📞 Calling recipient ${currentRecipientIndex + 1}/${recipients.length} (Loop ${callSequence.loopCount + 1}): ${recipient.fullName}`);
 
       // Lấy thông tin requester để hiển thị
       const requesterData = await User.findById(requester).select('fullName avatar phoneNumber');
@@ -118,6 +126,7 @@ class SOSCallService {
         recipientId,
         recipientIndex: currentRecipientIndex + 1,
         totalRecipients: recipients.length,
+        loopCount: callSequence.loopCount + 1, // 🆕 Thêm số vòng lặp vào callData
         timestamp: new Date().toISOString()
       };
 
@@ -192,6 +201,7 @@ class SOSCallService {
         requesterPhone: requester.phoneNumber || '',
         recipientIndex: String(recipientIndex), // ✅ Lấy từ callData
         totalRecipients: String(totalRecipients), // ✅ Lấy từ callData
+        loopCount: String(callData.loopCount || 1), // 🆕 Thêm loopCount vào FCM data
         timestamp: new Date().toISOString(),
         clickAction: 'SOS_CALL_INCOMING'
       };

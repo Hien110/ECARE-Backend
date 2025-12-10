@@ -1477,10 +1477,16 @@ const UserController = {
 
       const relationships = await Relationship.find({
         elderly: elderlyId,
-        status: 'accepted'
+        status: 'accepted',
+        relationship: { $ne: 'Bác sĩ' }
       }).populate('family', '-password');
 
-      const familyMembers = relationships.map(rel => rel.family);
+      // 🆕 Sắp xếp: "Người hỗ trợ" lên đầu
+      const supporters = relationships.filter(rel => rel.relationship === 'Người hỗ trợ');
+      const others = relationships.filter(rel => rel.relationship !== 'Người hỗ trợ');
+      const sortedRelationships = [...supporters, ...others];
+
+      const familyMembers = sortedRelationships.map(rel => rel.family);
 
       return res.status(200).json({ success: true, data: familyMembers });
     } catch (err) {
