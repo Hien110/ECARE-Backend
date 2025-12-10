@@ -52,7 +52,7 @@ const consultationSummaryController = {
       try {
         const updatedRegistration = await RegistrationConsulation.findOneAndUpdate(
           { _id: registrationId, status: { $ne: 'completed' } },
-          { $set: { status: 'completed' } },
+          { $set: { status: 'completed', paymentStatus: 'paid' } },
           { new: true },
         );
 
@@ -65,7 +65,6 @@ const consultationSummaryController = {
         }
       } catch (autoErr) {
         console.error('AUTO COMPLETE REGISTRATION / UPDATE DOCTOR PROFILE ERROR:', autoErr);
-        // Không throw để tránh làm fail API lưu phiếu khám
       }
 
       return res.status(200).json({
