@@ -123,7 +123,6 @@ const DoctorBookingController = {
         });
       }
 
-      // Lấy tất cả registration của bác sĩ trong khoảng ngày, trừ completed/cancelled
       const registrations = await RegistrationConsulation.find({
         doctor: doctorId,
         status: { $nin: ["completed", "cancelled"] },
@@ -132,8 +131,7 @@ const DoctorBookingController = {
         .select("scheduledDate slot status")
         .lean();
 
-      // Gom theo ngày, đánh dấu slot đã bận (morning/afternoon)
-      const busyByDay = new Map(); // key: yyyy-MM-dd -> { morning: true/false, afternoon: true/false }
+      const busyByDay = new Map(); 
       registrations.forEach((r) => {
         if (!r.scheduledDate) return;
         const d = new Date(r.scheduledDate);
@@ -149,12 +147,10 @@ const DoctorBookingController = {
       const result = [];
       const dayCursor = new Date(startDay);
 
-      // Lấy thời gian hiện tại theo giờ hệ thống server.
-      // Giả định server đang dùng giờ VN hoặc đã được cấu hình đúng.
+     
       const now = new Date();
 
-      // Đặt lịch phải trước giờ bắt đầu mỗi slot ít nhất 30 phút
-      const LIMIT_MINUTES = 30;
+      const LIMIT_MINUTES = 60;
       const LIMIT_MS = LIMIT_MINUTES * 60 * 1000;
 
       while (dayCursor <= endDay) {
@@ -163,14 +159,12 @@ const DoctorBookingController = {
 
         const freeSlots = [];
 
-        // morning: 8h - 10h
         if (!busy.morning) {
           const start = new Date(dayCursor);
           start.setHours(8, 0, 0, 0);
           const end = new Date(dayCursor);
           end.setHours(10, 0, 0, 0);
 
-          // Chỉ cho đặt nếu còn ít nhất 30 phút trước 8h
           if (start.getTime() - now.getTime() >= LIMIT_MS) {
             freeSlots.push({
               slot: "morning",
@@ -352,6 +346,12 @@ const DoctorBookingController = {
           ? priceConfig.price
           : RegistrationConsulation.schema.path("price").defaultValue || 0;
 
+      const normalizedPaymentMethod =
+        paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
+
+      const initialPaymentStatus =
+        normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
+
       const registration = new RegistrationConsulation({
         doctor: doctorId,
         registrant: registrantUserId,
@@ -359,17 +359,16 @@ const DoctorBookingController = {
         scheduledDate: dateObj,
         slot,
         doctorNote: note || "",
-        paymentMethod: paymentMethod || "cash",
+        paymentMethod: normalizedPaymentMethod,
+        paymentStatus: initialPaymentStatus,
         price: resolvedPrice,
       });
 
       await registration.save();
 
-      // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION VỚI BÁC SĨ ==================
       try {
         const doctorUserId = doctorId;
 
-        // Hàm nhỏ: đảm bảo có Conversation 1-1 giữa 2 user
         const ensureOneToOneConversation = async (userA, userB) => {
           if (!userA || !userB) return null;
           if (String(userA) === String(userB)) return null;
@@ -394,7 +393,6 @@ const DoctorBookingController = {
           return conv;
         };
 
-        // Hàm nhỏ: tạo Relationship accepted giữa patient và doctor nếu chưa có
         const ensureDoctorPatientRelationship = async (patientId) => {
           if (!patientId || !doctorUserId) return null;
           if (String(patientId) === String(doctorUserId)) return null;
@@ -435,17 +433,14 @@ const DoctorBookingController = {
           return rel;
         };
 
-        // 1) Tạo/đảm bảo quan hệ & conversation giữa beneficiary (người được khám) và bác sĩ
         await ensureDoctorPatientRelationship(elderlyId);
 
-        // 2) Nếu registrant khác beneficiary thì cũng tạo quan hệ & conversation giữa registrant và bác sĩ
         if (String(registrantUserId) !== String(elderlyId)) {
           await ensureDoctorPatientRelationship(registrantUserId);
         }
       } catch (autoErr) {
-        // Không để lỗi auto-connect làm fail việc tạo lịch
       }
-      // ================== HẾT PHẦN AUTO KẾT NỐI ==================
+     
 
       return res.status(201).json({
         success: true,
@@ -588,7 +583,6 @@ const DoctorBookingController = {
           .sort({ registeredAt: -1, createdAt: -1 })
           .lean();
 
-        // Không còn Consultation riêng, dùng trực tiếp registration + Payment (nếu có)
         const regIds = doctorRegs.map((r) => String(r._id));
 
         const payments = await Payment.find({
@@ -887,7 +881,6 @@ const DoctorBookingController = {
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
 
-      // ==== đảm bảo registrant là object User ====
       const registrantIdList = [];
       registrations.forEach((reg) => {
         const r = reg.registrant;
@@ -1029,21 +1022,8 @@ const DoctorBookingController = {
           message: "Không tìm thấy lịch tư vấn",
         });
       }
-
-      console.log(
-        LOG_TAG,
-        "✅ FOUND registration:",
-        "\n  _id          =",
-        registration._id.toString(),
-        "\n  status       =",
-        registration.status,
-        "\n  registrant   =",
-        registration.registrant,
-        "\n  beneficiary  =",
-        registration.beneficiary,
-        "\n  doctor       =",
-        registration.doctor,
-      );
+      
+      
 
       const userIdStr = String(userId);
       const registrantStr = String(registration.registrant || "");
@@ -1056,19 +1036,8 @@ const DoctorBookingController = {
       const isAdmin = role === "admin";
       const isDoctorOfBooking = role === "doctor" && userIdStr === doctorStr;
 
-      console.log(LOG_TAG, "Check quyền:", {
-        userIdStr,
-        registrantStr,
-        beneficiaryStr,
-        doctorStr,
-        role,
-        isOwner,
-        isAdmin,
-        isDoctorOfBooking,
-        desiredStatus,
-      });
+      
 
-      // Cho phép: cancelled (owner/admin), in_progress/completed (doctor của lịch hoặc admin)
       if (desiredStatus === "cancelled") {
         if (!isOwner && !isAdmin) {
           console.log(
@@ -1113,14 +1082,7 @@ const DoctorBookingController = {
         registration.cancelReason = reason;
         await registration.save({ session });
 
-        console.log(
-          LOG_TAG,
-          "✅ Sau khi save registration (cancelled):",
-          "\n  _id    =",
-          registration._id.toString(),
-          "\n  status =",
-          registration.status,
-        );
+       
 
         const payment = await Payment.findOne({
           serviceType: "consultation",
@@ -1145,21 +1107,6 @@ const DoctorBookingController = {
             payment.cancelledAt = new Date();
             await payment.save({ session });
 
-            console.log(
-              LOG_TAG,
-              "✅ Sau khi save payment (cancelled):",
-              "\n  _id    =",
-              payment._id.toString(),
-              "\n  status =",
-              payment.status,
-            );
-          } else {
-            console.log(
-              LOG_TAG,
-              "Payment đã ở trạng thái",
-              payment.status,
-              "=> không đổi nữa",
-            );
           }
         } else {
           console.log(

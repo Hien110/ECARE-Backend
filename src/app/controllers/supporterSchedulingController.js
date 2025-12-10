@@ -1,14 +1,11 @@
-// controllers/supporterScheduling.controller.js
 const SupporterScheduling = require("../models/SupporterScheduling");
 const SupporterService = require("../models/SupporterServices");
 const User = require("../models/User");
 const Relationship = require("../models/Relationship");
 const Conversation = require("../models/Conversation");
 
-// TODO: thay bằng util thực của bạn
 const { encryptField, tryDecryptField } = require("./userController");
 
-// ---- helpers ----
 const addDays = (date, days) => {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
@@ -17,19 +14,10 @@ const addDays = (date, days) => {
 
 const projectUser = "-password -refreshToken -__v";
 
-// Tạo bản sao JSON an toàn để giải mã field nhạy cảm mà không mutate doc
 const toPlain = (doc) => JSON.parse(JSON.stringify(doc));
 
-// ---- Controller ----
 const schedulingController = {
-  /**
-   * POST /api/schedulings
-   * Body (tuỳ bookingType):
-   * - Common: supporter, elderly, createdBy, service, address?, notes?, paymentStatus?
-   * - session: scheduleDate (YYYY-MM-DD), scheduleTime ('morning'|'afternoon'|'evening')
-   * - day:     scheduleDate (YYYY-MM-DD)
-   * - month:   monthStart (YYYY-MM-DD), monthEnd? (auto 30d nếu không gửi), monthSessionsPerDay? (lấy từ service)
-   */
+
 createScheduling: async (req, res) => {
   const TAG = "[SupporterScheduling][create]";
   try {
@@ -41,17 +29,16 @@ createScheduling: async (req, res) => {
       service,
       address,
       notes,
-      paymentStatus, // 'unpaid'|'paid'|'refunded' (tuỳ FE)
-      paymentMethod, // 'cash'|'bank_transfer' (nếu FE gửi)
-      bookingType, // 'session'|'day'|'month'
+      paymentStatus, 
+      paymentMethod,
+      bookingType, 
       scheduleDate,
       scheduleTime,
       monthStart,
       monthEnd,
-      monthSessionsPerDay, // FE có thể không gửi: lấy từ service
+      monthSessionsPerDay, 
     } = schedulingData || {};
 
-    // Bắt các field bắt buộc tối thiểu theo yêu cầu business
     if (!supporter || !elderly || !createdBy || !service || !bookingType) {
       return res.status(400).json({
         success: false,
@@ -60,14 +47,12 @@ createScheduling: async (req, res) => {
       });
     }
 
-    // Tối thiểu cần địa chỉ để di chuyển (theo form của bạn)
     if (!address) {
       return res
         .status(400)
         .json({ success: false, message: "Thiếu địa chỉ (address)." });
     }
 
-    // Tải service để snapshot giá + cấu hình
     const svc = await SupporterService.findById(service).lean();
 
     if (!svc || !svc.isActive) {
@@ -77,7 +62,6 @@ createScheduling: async (req, res) => {
       });
     }
 
-    // Tính priceAtBooking + chuẩn bị payload theo bookingType
     let priceAtBooking = 0;
     const serviceSnapshot = {
       name: svc.name,
@@ -106,7 +90,7 @@ createScheduling: async (req, res) => {
       address: encryptField(address.trim()),
       bookingType,
       serviceSnapshot,
-      status: "confirmed", // ✅ luôn ở trạng thái đã xác nhận sau khi đặt lịch
+      status: "confirmed",
     };
 
     if (bookingType === "session") {
@@ -116,7 +100,6 @@ createScheduling: async (req, res) => {
           message: "Thiếu scheduleDate hoặc scheduleTime cho gói theo buổi.",
         });
       }
-      // snapshot giá
       priceAtBooking =
         scheduleTime === "morning"
           ? serviceSnapshot.bySession.morning
@@ -145,13 +128,11 @@ createScheduling: async (req, res) => {
           message: "Thiếu monthStart cho gói theo tháng.",
         });
       }
-      // Nếu FE không gửi monthEnd → auto 30 ngày (start + 29)
       const _monthStart = new Date(monthStart);
       const _monthEnd = monthEnd
         ? new Date(monthEnd)
         : addDays(_monthStart, 29);
 
-      // Buổi áp dụng mỗi ngày: nếu FE không gửi, lấy từ service
       const sessionsDaily =
         Array.isArray(monthSessionsPerDay) && monthSessionsPerDay.length > 0
           ? monthSessionsPerDay
@@ -171,12 +152,10 @@ createScheduling: async (req, res) => {
 
     const created = await SupporterScheduling.create(basePayload);
 
-    // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION ==================
     const payStatusLower = (basePayload.paymentStatus || "").toLowerCase();
 
     if (payStatusLower === "paid" || payStatusLower === "unpaid") {
       try {
-        // Lấy role của người tạo và elderly
         const [elderlyUser, creatorUser] = await Promise.all([
           User.findById(elderly).select("role"),
           User.findById(createdBy).select("role"),
@@ -185,7 +164,6 @@ createScheduling: async (req, res) => {
         if (elderlyUser && creatorUser) {
           const creatorRole = creatorUser.role;
 
-          // Hàm nhỏ tạo/accept 1 relationship + đảm bảo có Conversation 1–1
           const ensureAcceptedSupporterRelationshipInline = async (
             elderlyId,
             supporterId,
@@ -210,7 +188,6 @@ createScheduling: async (req, res) => {
                 rel.relationship = relationshipLabel;
                 changed = true;
               }
-              // Với "Người hỗ trợ" thì requestedBy phải là chính supporter
               if (
                 relationshipLabel === "Người hỗ trợ" &&
                 String(rel.requestedBy) !== String(supporterId)
@@ -223,14 +200,13 @@ createScheduling: async (req, res) => {
                 await rel.save();
               }
 
-              // Đảm bảo có conversation 1–1 giữa elderly & supporter
               let conv = await Conversation.findOne({
                 isActive: true,
                 $and: [
                   { participants: { $elemMatch: { user: elderlyId } } },
                   { participants: { $elemMatch: { user: supporterId } } },
                 ],
-                "participants.2": { $exists: false }, // chỉ 2 người
+                "participants.2": { $exists: false },
               });
 
               if (!conv) {
@@ -247,7 +223,6 @@ createScheduling: async (req, res) => {
               return { relationship: rel, conversation: conv };
             }
 
-            // Chưa có relationship → tạo mới accepted
             rel = new Relationship({
               elderly: elderlyId,
               family: supporterId,
@@ -259,7 +234,6 @@ createScheduling: async (req, res) => {
 
             await rel.save();
 
-            // Tạo luôn conversation mới
             let conv = new Conversation({
               participants: [
                 { user: elderlyId },
@@ -273,10 +247,8 @@ createScheduling: async (req, res) => {
           };
 
           if (creatorRole === "family") {
-            // CASE 1: Người thân đặt gói hỗ trợ cho người cao tuổi
             const familyId = createdBy;
 
-            // Lấy tất cả elderly đang connect accepted với family này
             const acceptedRels = await Relationship.find({
               family: familyId,
               status: "accepted",
@@ -286,7 +258,6 @@ createScheduling: async (req, res) => {
             acceptedRels.forEach((rel) => {
               if (rel.elderly) elderlySet.add(String(rel.elderly));
             });
-            // Đảm bảo có elderly hiện tại trong booking
             elderlySet.add(String(elderly));
 
             const elderlyIds = Array.from(elderlySet);
@@ -297,24 +268,19 @@ createScheduling: async (req, res) => {
               });
             }
           } else if (creatorRole === "elderly") {
-            // CASE 2: Người cao tuổi tự đặt gói hỗ trợ
             await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
               relationshipLabel: "Người hỗ trợ",
             });
           } else {
-            // CASE 3: Vai trò khác (admin, supporter tự đặt hộ, ...) → ít nhất connect elderly hiện tại
             await ensureAcceptedSupporterRelationshipInline(elderly, supporter, {
               relationshipLabel: "Người hỗ trợ",
             });
           }
         }
       } catch (autoErr) {
-        // nuốt lỗi auto-connect, tránh làm fail booking
       }
     }
-    // ================== HẾT PHẦN AUTO KẾT NỐI ==================
 
-    // Trả bản sao đã giải mã address để FE hiển thị
     const plain = toPlain(created);
     if (plain.address) {
       plain.address = tryDecryptField(plain.address);
@@ -332,11 +298,7 @@ createScheduling: async (req, res) => {
   }
 },
 
-  /**
-   * GET /api/schedulings/by-user
-   * Query: userId, includeCanceled?=false, page=1, limit=20
-   * -> Lịch của elderly (người được hỗ trợ)
-   */
+
   getSchedulingsByUserId: async (req, res) => {
     try {
       const {
@@ -367,7 +329,6 @@ createScheduling: async (req, res) => {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      // Giải mã address và các trường mã hóa khác nếu cần
       const data = items.map((it) => {
         const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
         const phoneNumberSupporter = it.supporter?.phoneNumberEnc
@@ -409,11 +370,7 @@ createScheduling: async (req, res) => {
     }
   },
 
-  /**
-   * GET /api/schedulings/by-supporter
-   * Query: userId, includeCanceled?=false, page=1, limit=20
-   * -> Lịch của supporter
-   */
+
   getSchedulingsBySupporterId: async (req, res) => {
     try {
       const {
@@ -442,7 +399,6 @@ createScheduling: async (req, res) => {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      // Giải mã address và các trường mã hóa khác nếu cần
       const data = items.map((it) => {
         const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
         const phoneNumberSupporter = it.supporter?.phoneNumberEnc
@@ -484,27 +440,24 @@ createScheduling: async (req, res) => {
     }
   },
 
-  /**
-   * GET /api/schedulings/:id
-   */
+
   getSchedulingById: async (req, res) => {
     try {
       const schedulingId = req.params.id;
 
-      // Populate supporter, elderly, and createdBy với các trường mã hóa từ User
       const scheduling = await SupporterScheduling.findById(schedulingId)
         .populate(
           "supporter",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
-        ) // Populate các trường mã hóa từ User
+        ) 
         .populate(
           "elderly",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar"
-        ) // Populate elderly nếu có
+        ) 
         .populate(
           "createdBy",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar"
-        ) // Populate createdBy nếu có
+        )
         .lean();
 
       if (!scheduling) {
@@ -542,8 +495,8 @@ createScheduling: async (req, res) => {
         if (v == null || v === "") return null;
         const s = String(v);
         try {
-          if (s.includes(".")) return decryptGCM(s); // Dữ liệu kiểu GCM
-          if (s.includes(":")) return decryptLegacy(s); // Dữ liệu kiểu legacy
+          if (s.includes(".")) return decryptGCM(s);
+          if (s.includes(":")) return decryptLegacy(s);
           return s;
         } catch {
           return null;
@@ -560,12 +513,10 @@ createScheduling: async (req, res) => {
         return cur;
       };
 
-      // Giải mã trường address bằng tryDecryptField
       const addressDecrypted = scheduling.address
         ? tryDecryptField(scheduling.address)
         : "";
 
-      // Giải mã các trường mã hóa khác
       const phoneNumberSupporter = scheduling?.supporter?.phoneNumberEnc
         ? tryDecryptAny(scheduling?.supporter?.phoneNumberEnc)
         : "";
@@ -585,10 +536,9 @@ createScheduling: async (req, res) => {
         ? tryDecryptAny(scheduling?.createdBy?.emailEnc)
         : "";
 
-      // Tạo response với
       const responseScheduling = {
         ...scheduling,
-        address: addressDecrypted, // Giải mã address bằng tryDecryptField
+        address: addressDecrypted, 
         phoneNumberSupporter: phoneNumberSupporter,
         emailSupporter: emailSupporter,
         phoneNumberElderly: phoneNumberElderly,
@@ -597,7 +547,6 @@ createScheduling: async (req, res) => {
         emailCreatedBy: emailCreatedBy,
       };
 
-      // Dọn rác (xóa các trường mã hóa khỏi kết quả trả về)
       delete responseScheduling.phoneNumberEnc;
       delete responseScheduling.emailEnc;
       delete responseScheduling.addressEnc;
@@ -605,11 +554,9 @@ createScheduling: async (req, res) => {
       delete responseScheduling.currentAddressEnc;
       delete responseScheduling.hometownEnc;
 
-      // Mask thông tin nhạy cảm như số điện thoại và email
       const mask = (x, n = 4) =>
         typeof x === "string" && x ? x.slice(0, n) + "***" : x;
 
-      // Thiết lập no-store cho cache để bảo mật dữ liệu
       res.set("Cache-Control", "no-store");
       return res.status(200).json({ success: true, data: responseScheduling });
     } catch (error) {
@@ -623,10 +570,7 @@ createScheduling: async (req, res) => {
         });
     }
   },
-  /**
-   * PATCH /api/schedulings/:id/status
-   * Body: { status }
-   */
+ 
   updateSchedulingStatus: async (req, res) => {
     try {
       const schedulingId = req.params.id;
@@ -664,11 +608,7 @@ createScheduling: async (req, res) => {
     }
   },
 
-  /**
-   * POST /api/schedulings/check-all-completed-or-canceled
-   * Body: { supporterId, elderlyId }
-   * Trả về true nếu tất cả lịch giữa 2 bên đều 'completed' hoặc 'canceled'
-   */
+
   checkAllCompletedOrCanceled: async (req, res) => {
     try {
       const { supporterId, elderlyId } = req.body || {};
@@ -705,7 +645,6 @@ createScheduling: async (req, res) => {
     }
   },
 
-  // Lấy tất cả danh sách đặt lịch dành cho mục đích admin (có phân trang, lọc, tìm kiếm)
   getAllSchedulingsForAdmin: async (req, res) => {
     try {
       const { page = 1, limit = 20 } = req.query || {};
@@ -741,13 +680,9 @@ createScheduling: async (req, res) => {
       });
     }
   },
-    /**
-   * GET /api/schedulings/supporter-detail/:id
-   * -> Lấy chi tiết supporter (User) + giải mã địa chỉ / số điện thoại / email
-   */
+
   getSupporterDetail: async (req, res) => {
   try {
-    // Ưu tiên lấy từ params, fallback sang query/body cho linh hoạt
     const supporterId =
       req.params.id ||
       req.params.supporterId ||
@@ -761,7 +696,6 @@ createScheduling: async (req, res) => {
       });
     }
 
-    // Lấy user (supporter) từ DB
     const supporter = await User.findById(supporterId).lean();
     if (!supporter) {
       return res.status(404).json({
@@ -770,7 +704,6 @@ createScheduling: async (req, res) => {
       });
     }
 
-    // ====== Setup giải mã ======
     const crypto = require("crypto");
     const ENC_KEY_RAW = process.env.ENC_KEY || "";
     const ENC_KEY = ENC_KEY_RAW ? Buffer.from(ENC_KEY_RAW, "base64") : null;
@@ -796,7 +729,6 @@ createScheduling: async (req, res) => {
     const decryptGCM = (packed) => {
       if (!packed || !ENC_KEY) return null;
       try {
-        // Định dạng: iv.tag.data (base64url)
         const [ivB64, tagB64, dataB64] = String(packed).split(".");
         if (!ivB64 || !tagB64 || !dataB64) return null;
         const iv = Buffer.from(ivB64, "base64url");
@@ -811,12 +743,10 @@ createScheduling: async (req, res) => {
       }
     };
 
-    // Thử giải mã 1 giá trị (GCM, legacy). Nếu không giải mã được thì trả lại string gốc.
     const tryDecryptAny = (v) => {
       if (v == null || v === "") return null;
       const s = String(v);
 
-      // Không có ENC_KEY => không decrypt được, trả nguyên string (tránh crash)
       if (!ENC_KEY) return s;
 
       try {
@@ -828,7 +758,6 @@ createScheduling: async (req, res) => {
           const dec = decryptLegacy(s);
           if (dec != null) return dec;
         }
-        // Không nhận dạng được format → coi là plain text
         return s;
       } catch (e) {
         console.error("[getSupporterDetail] tryDecryptAny error:", e.message);
@@ -836,7 +765,6 @@ createScheduling: async (req, res) => {
       }
     };
 
-    // Helper: chọn giá trị đầu tiên khác null/"" theo list key
     const pickFirstNonEmpty = (doc, keys = []) => {
       for (const k of keys) {
         if (!k) continue;
@@ -850,7 +778,6 @@ createScheduling: async (req, res) => {
       return null;
     };
 
-    // Helper decode 1 field với nhiều key enc + plain
     const decodeField = (encKeys = [], plainKeys = []) => {
       const rawEnc = pickFirstNonEmpty(supporter, encKeys);
       const rawPlain = pickFirstNonEmpty(supporter, plainKeys);
@@ -862,7 +789,6 @@ createScheduling: async (req, res) => {
       return decrypted != null ? String(decrypted).trim() : String(raw).trim();
     };
 
-    // ====== Giải mã các field nhạy cảm ======
     const phoneNumberDec = decodeField(
       ["phoneNumberEnc", "phoneEnc"],
       ["phoneNumber", "phone", "mobile", "mobileNumber"]
@@ -881,7 +807,6 @@ createScheduling: async (req, res) => {
       ["hometown", "homeTown"]
     );
 
-    // ====== Tạo object trả về cho FE (KHÔNG expose field mã hoá) ======
     const responseSupporter = {
       _id: supporter._id,
       fullName: supporter.fullName,
@@ -889,7 +814,6 @@ createScheduling: async (req, res) => {
       gender: supporter.gender,
       avatar: supporter.avatar,
 
-      // ƯU TIÊN GIÁ TRỊ ĐÃ GIẢI MÃ, fallback về field thô nếu vẫn null
       phoneNumber:
         phoneNumberDec ??
         supporter.phoneNumber ??
@@ -902,7 +826,6 @@ createScheduling: async (req, res) => {
       hometown: hometownDec ?? supporter.hometown ?? null,
     };
 
-    // Không cache thông tin nhạy cảm
     res.set("Cache-Control", "no-store");
 
     return res.status(200).json({

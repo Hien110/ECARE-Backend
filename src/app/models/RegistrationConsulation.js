@@ -12,6 +12,7 @@ const RegistrationConsulationSchema = new mongoose.Schema({
     enum: [ 'confirmed', 'completed', 'cancelled'],
     default: 'confirmed', 
   },
+
   slot: {
     type: String,
     enum: ['morning', 'afternoon'],
@@ -32,7 +33,7 @@ const RegistrationConsulationSchema = new mongoose.Schema({
       enum: ['unpaid', 'paid', 'refunded'],
       default: 'unpaid',
     },
-
+    cancelReason: { type: String, default: '' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('RegistrationConsulation', RegistrationConsulationSchema);
