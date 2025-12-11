@@ -1,14 +1,11 @@
-// controllers/supporterScheduling.controller.js
 const SupporterScheduling = require("../models/SupporterScheduling");
 const SupporterService = require("../models/SupporterServices");
 const User = require("../models/User");
 const Relationship = require("../models/Relationship");
 const Conversation = require("../models/Conversation");
 
-// TODO: thay bằng util thực của bạn
 const { encryptField, tryDecryptField } = require("./userController");
 
-// ---- helpers ----
 const addDays = (date, days) => {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
@@ -17,10 +14,8 @@ const addDays = (date, days) => {
 
 const projectUser = "-password -refreshToken -__v";
 
-// Tạo bản sao JSON an toàn để giải mã field nhạy cảm mà không mutate doc
 const toPlain = (doc) => JSON.parse(JSON.stringify(doc));
 
-// ---- Controller ----
 const schedulingController = {
   /**
    * POST /api/schedulings
@@ -263,7 +258,6 @@ const schedulingController = {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      // Giải mã address và các trường mã hóa khác nếu cần
       const data = items.map((it) => {
         const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
         const phoneNumberSupporter = it.supporter?.phoneNumberEnc
@@ -305,11 +299,7 @@ const schedulingController = {
     }
   },
 
-  /**
-   * GET /api/schedulings/by-supporter
-   * Query: userId, includeCanceled?=false, page=1, limit=20
-   * -> Lịch của supporter
-   */
+
   getSchedulingsBySupporterId: async (req, res) => {
     try {
       const {
@@ -339,7 +329,6 @@ const schedulingController = {
         SupporterScheduling.countDocuments(query),
       ]);
 
-      // Giải mã address và các trường mã hóa khác nếu cần
       const data = items.map((it) => {
         const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
         const phoneNumberSupporter = it.supporter?.phoneNumberEnc
@@ -381,9 +370,7 @@ const schedulingController = {
     }
   },
 
-  /**
-   * GET /api/schedulings/:id
-   */
+
   getSchedulingById: async (req, res) => {
     try {
       const schedulingId = req.params.id;
@@ -437,8 +424,8 @@ const schedulingController = {
         if (v == null || v === "") return null;
         const s = String(v);
         try {
-          if (s.includes(".")) return decryptGCM(s); // Dữ liệu kiểu GCM
-          if (s.includes(":")) return decryptLegacy(s); // Dữ liệu kiểu legacy
+          if (s.includes(".")) return decryptGCM(s);
+          if (s.includes(":")) return decryptLegacy(s);
           return s;
         } catch {
           return null;
@@ -455,12 +442,10 @@ const schedulingController = {
         return cur;
       };
 
-      // Giải mã trường address bằng tryDecryptField
       const addressDecrypted = scheduling.address
         ? tryDecryptField(scheduling.address)
         : "";
 
-      // Giải mã các trường mã hóa khác
       const phoneNumberSupporter = scheduling?.supporter?.phoneNumberEnc
         ? tryDecryptAny(scheduling?.supporter?.phoneNumberEnc)
         : "";
@@ -484,7 +469,6 @@ const schedulingController = {
         emailElderly: emailElderly,
       };
 
-      // Dọn rác (xóa các trường mã hóa khỏi kết quả trả về)
       delete responseScheduling.phoneNumberEnc;
       delete responseScheduling.emailEnc;
       delete responseScheduling.addressEnc;
@@ -492,11 +476,9 @@ const schedulingController = {
       delete responseScheduling.currentAddressEnc;
       delete responseScheduling.hometownEnc;
 
-      // Mask thông tin nhạy cảm như số điện thoại và email
       const mask = (x, n = 4) =>
         typeof x === "string" && x ? x.slice(0, n) + "***" : x;
 
-      // Thiết lập no-store cho cache để bảo mật dữ liệu
       res.set("Cache-Control", "no-store");
       return res.status(200).json({ success: true, data: responseScheduling });
     } catch (error) {
@@ -510,10 +492,7 @@ const schedulingController = {
         });
     }
   },
-  /**
-   * PATCH /api/schedulings/:id/status
-   * Body: { status }
-   */
+ 
   updateSchedulingStatus: async (req, res) => {
     try {
       const schedulingId = req.params.id;
@@ -551,11 +530,7 @@ const schedulingController = {
     }
   },
 
-  /**
-   * POST /api/schedulings/check-all-completed-or-canceled
-   * Body: { supporterId, elderlyId }
-   * Trả về true nếu tất cả lịch giữa 2 bên đều 'completed' hoặc 'canceled'
-   */
+
   checkAllCompletedOrCanceled: async (req, res) => {
     try {
       const { supporterId, elderlyId } = req.body || {};
@@ -592,7 +567,6 @@ const schedulingController = {
     }
   },
 
-  // Lấy tất cả danh sách đặt lịch dành cho mục đích admin (có phân trang, lọc, tìm kiếm)
   getAllSchedulingsForAdmin: async (req, res) => {
     try {
       const { page = 1, limit = 20 } = req.query || {};
@@ -628,13 +602,9 @@ const schedulingController = {
       });
     }
   },
-    /**
-   * GET /api/schedulings/supporter-detail/:id
-   * -> Lấy chi tiết supporter (User) + giải mã địa chỉ / số điện thoại / email
-   */
+
   getSupporterDetail: async (req, res) => {
   try {
-    // Ưu tiên lấy từ params, fallback sang query/body cho linh hoạt
     const supporterId =
       req.params.id ||
       req.params.supporterId ||
@@ -648,7 +618,6 @@ const schedulingController = {
       });
     }
 
-    // Lấy user (supporter) từ DB
     const supporter = await User.findById(supporterId).lean();
     if (!supporter) {
       return res.status(404).json({
@@ -657,7 +626,6 @@ const schedulingController = {
       });
     }
 
-    // ====== Setup giải mã ======
     const crypto = require("crypto");
     const ENC_KEY_RAW = process.env.ENC_KEY || "";
     const ENC_KEY = ENC_KEY_RAW ? Buffer.from(ENC_KEY_RAW, "base64") : null;
@@ -683,7 +651,6 @@ const schedulingController = {
     const decryptGCM = (packed) => {
       if (!packed || !ENC_KEY) return null;
       try {
-        // Định dạng: iv.tag.data (base64url)
         const [ivB64, tagB64, dataB64] = String(packed).split(".");
         if (!ivB64 || !tagB64 || !dataB64) return null;
         const iv = Buffer.from(ivB64, "base64url");
@@ -698,12 +665,10 @@ const schedulingController = {
       }
     };
 
-    // Thử giải mã 1 giá trị (GCM, legacy). Nếu không giải mã được thì trả lại string gốc.
     const tryDecryptAny = (v) => {
       if (v == null || v === "") return null;
       const s = String(v);
 
-      // Không có ENC_KEY => không decrypt được, trả nguyên string (tránh crash)
       if (!ENC_KEY) return s;
 
       try {
@@ -715,7 +680,6 @@ const schedulingController = {
           const dec = decryptLegacy(s);
           if (dec != null) return dec;
         }
-        // Không nhận dạng được format → coi là plain text
         return s;
       } catch (e) {
         console.error("[getSupporterDetail] tryDecryptAny error:", e.message);
@@ -723,7 +687,6 @@ const schedulingController = {
       }
     };
 
-    // Helper: chọn giá trị đầu tiên khác null/"" theo list key
     const pickFirstNonEmpty = (doc, keys = []) => {
       for (const k of keys) {
         if (!k) continue;
@@ -737,7 +700,6 @@ const schedulingController = {
       return null;
     };
 
-    // Helper decode 1 field với nhiều key enc + plain
     const decodeField = (encKeys = [], plainKeys = []) => {
       const rawEnc = pickFirstNonEmpty(supporter, encKeys);
       const rawPlain = pickFirstNonEmpty(supporter, plainKeys);
@@ -749,7 +711,6 @@ const schedulingController = {
       return decrypted != null ? String(decrypted).trim() : String(raw).trim();
     };
 
-    // ====== Giải mã các field nhạy cảm ======
     const phoneNumberDec = decodeField(
       ["phoneNumberEnc", "phoneEnc"],
       ["phoneNumber", "phone", "mobile", "mobileNumber"]
@@ -768,7 +729,6 @@ const schedulingController = {
       ["hometown", "homeTown"]
     );
 
-    // ====== Tạo object trả về cho FE (KHÔNG expose field mã hoá) ======
     const responseSupporter = {
       _id: supporter._id,
       fullName: supporter.fullName,
@@ -776,7 +736,6 @@ const schedulingController = {
       gender: supporter.gender,
       avatar: supporter.avatar,
 
-      // ƯU TIÊN GIÁ TRỊ ĐÃ GIẢI MÃ, fallback về field thô nếu vẫn null
       phoneNumber:
         phoneNumberDec ??
         supporter.phoneNumber ??
@@ -789,7 +748,6 @@ const schedulingController = {
       hometown: hometownDec ?? supporter.hometown ?? null,
     };
 
-    // Không cache thông tin nhạy cảm
     res.set("Cache-Control", "no-store");
 
     return res.status(200).json({
