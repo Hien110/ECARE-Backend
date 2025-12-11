@@ -81,6 +81,31 @@ const schedulingController = {
         });
       }
 
+      // ✅ Kiểm tra xung đột lịch: supporter đã có lịch trong khoảng thời gian này chưa
+      const conflictSchedule = await SupporterScheduling.findOne({
+        supporter: supporter,
+        status: { $nin: ["canceled"] }, // không tính lịch đã hủy
+        $or: [
+          // Lịch mới nằm hoàn toàn trong lịch cũ
+          { startDate: { $lte: start }, endDate: { $gte: end } },
+          // Lịch mới bắt đầu trong khoảng lịch cũ
+          { startDate: { $lte: start }, endDate: { $gte: start, $lt: end } },
+          // Lịch mới kết thúc trong khoảng lịch cũ
+          { startDate: { $gt: start, $lte: end }, endDate: { $gte: end } },
+          // Lịch mới bao phủ hoàn toàn lịch cũ
+          { startDate: { $gte: start }, endDate: { $lte: end } },
+        ],
+      });
+
+      if (conflictSchedule) {
+        const conflictStartStr = new Date(conflictSchedule.startDate).toLocaleDateString('vi-VN');
+        const conflictEndStr = new Date(conflictSchedule.endDate).toLocaleDateString('vi-VN');
+        return res.status(409).json({
+          success: false,
+          message: `Supporter đã có lịch từ ${conflictStartStr} đến ${conflictEndStr}. Vui lòng chọn supporter khác hoặc thời gian khác.`,
+        });
+      }
+
       // Create scheduling
       const payload = {
         supporter,
@@ -93,7 +118,7 @@ const schedulingController = {
         paymentStatus,
         notes: notes?.trim() || "",
         price: price || svc.price || 0,
-        status: "pending",
+        status: "confirmed",
       };
 
       if (address?.trim()) {
@@ -102,6 +127,90 @@ const schedulingController = {
 
       const created = await SupporterScheduling.create(payload);
       const plain = toPlain(created);
+
+      // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION VỚI SUPPORTER ==================
+      try {
+        const supporterUserId = supporter;
+
+        // Hàm nhỏ: đảm bảo có Conversation 1-1 giữa 2 user
+        const ensureOneToOneConversation = async (userA, userB) => {
+          if (!userA || !userB) return null;
+          if (String(userA) === String(userB)) return null;
+
+          let conv = await Conversation.findOne({
+            isActive: true,
+            $and: [
+              { participants: { $elemMatch: { user: userA } } },
+              { participants: { $elemMatch: { user: userB } } },
+            ],
+            "participants.2": { $exists: false },
+          });
+
+          if (!conv) {
+            conv = new Conversation({
+              participants: [{ user: userA }, { user: userB }],
+              isActive: true,
+            });
+            await conv.save();
+          }
+
+          return conv;
+        };
+
+        // Hàm nhỏ: tạo Relationship accepted giữa elderly/registrant và supporter nếu chưa có
+        const ensureSupporterRelationship = async (userId) => {
+          if (!userId || !supporterUserId) return null;
+          if (String(userId) === String(supporterUserId)) return null;
+
+          const filter = {
+            elderly: userId,
+            family: supporterUserId,
+          };
+
+          let rel = await Relationship.findOne(filter);
+          if (!rel) {
+            rel = new Relationship({
+              elderly: userId,
+              family: supporterUserId,
+              relationship: "Người hỗ trợ",
+              status: "accepted",
+              requestedBy: supporterUserId,
+              respondedAt: new Date(),
+            });
+            await rel.save();
+          } else {
+            let changed = false;
+            if (rel.status !== "accepted") {
+              rel.status = "accepted";
+              rel.respondedAt = new Date();
+              changed = true;
+            }
+            if (rel.relationship !== "Người hỗ trợ") {
+              rel.relationship = "Người hỗ trợ";
+              changed = true;
+            }
+            if (changed) {
+              await rel.save();
+            }
+          }
+
+          await ensureOneToOneConversation(userId, supporterUserId);
+          return rel;
+        };
+
+        // 1) Tạo/đảm bảo quan hệ & conversation giữa elderly (người được hỗ trợ) và supporter
+        await ensureSupporterRelationship(elderly);
+
+        // 2) Nếu registrant khác elderly thì cũng tạo quan hệ & conversation giữa registrant và supporter
+        const registrantId = registrant || supporter;
+        if (String(registrantId) !== String(elderly)) {
+          await ensureSupporterRelationship(registrantId);
+        }
+      } catch (autoErr) {
+        // Không để lỗi auto-connect làm fail việc tạo lịch
+        console.error(`${TAG} Auto-connect error:`, autoErr);
+      }
+      // ================== HẾT PHẦN AUTO KẾT NỐI ==================
 
       return res.status(201).json({
         success: true,

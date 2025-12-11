@@ -407,8 +407,8 @@ const SupporterProfileController = {
       const { bookingDraft } = req.body;
       console.log(bookingDraft);
 
-      if (!bookingDraft?.packageType) {
-        return res.status(400).json({ success: false, message: 'Thiếu bookingDraft' });
+      if (!bookingDraft?.startDate || !bookingDraft?.endDate) {
+        return res.status(400).json({ success: false, message: 'Thiếu startDate hoặc endDate trong bookingDraft' });
       }
 
       // 1) Lấy toàn bộ userId của supporter có hồ sơ
