@@ -808,10 +808,17 @@ const DoctorBookingController = {
   },
 
   getBookingsByElderlyId: async (req, res) => {
+    const TAG_LOG = '[getBookingsByElderlyId]';
     try {
       const requesterId = getUserIdFromReq(req);
       const role = (req.user?.role || "").toLowerCase();
       const { elderlyId } = req.params || {};
+
+      console.log(TAG_LOG, 'START', {
+        requesterId,
+        role,
+        elderlyId,
+      });
 
       if (!requesterId) {
         return res
@@ -820,6 +827,7 @@ const DoctorBookingController = {
       }
 
       if (!elderlyId || !mongoose.Types.ObjectId.isValid(elderlyId)) {
+        console.log(TAG_LOG, 'elderlyId không hợp lệ:', elderlyId);
         return res.status(400).json({
           success: false,
           message: "elderlyId không hợp lệ",
@@ -849,6 +857,7 @@ const DoctorBookingController = {
       }
 
       if (!canView) {
+        console.log(TAG_LOG, '❌ Không có quyền xem, role =', role, 'requesterId =', requesterId, 'elderlyId =', elderlyId);
         return res.status(403).json({
           success: false,
           message:
@@ -858,8 +867,9 @@ const DoctorBookingController = {
 
       const query = {
         beneficiary: elderlyId,
-        isActive: true,
       };
+
+      console.log(TAG_LOG, 'Query:', query);
 
       let registrations = await RegistrationConsulation.find(query)
         .populate({
@@ -868,11 +878,7 @@ const DoctorBookingController = {
         })
         .populate({
           path: "beneficiary",
-          select: "fullName avatar gender dateOfBirth role",
-        })
-        .populate({
-          path: "packageRef",
-          select: "title price durationOptions description",
+          select: "fullName avatar gender dateOfBirth role currentAddress",
         })
         .populate({
           path: "registrant",
@@ -880,6 +886,8 @@ const DoctorBookingController = {
         })
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
+
+      console.log(TAG_LOG, 'Found registrations:', registrations.length);
 
       const registrantIdList = [];
       registrations.forEach((reg) => {
@@ -937,6 +945,44 @@ const DoctorBookingController = {
         payByRegId.set(String(p.serviceId), p);
       });
 
+      // Decrypt helper functions
+      const crypto = require("crypto");
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || "", "base64");
+
+      const decryptLegacy = (enc) => {
+        if (!enc) return null;
+        const [ivB64, ctB64, tagB64] = String(enc).split(":");
+        const iv = Buffer.from(ivB64, "base64");
+        const ct = Buffer.from(ctB64, "base64");
+        const tag = Buffer.from(tagB64, "base64");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+      };
+
+      const decryptGCM = (packed) => {
+        if (!packed) return null;
+        const [ivB64, tagB64, dataB64] = String(packed).split(".");
+        const iv = Buffer.from(ivB64, "base64url");
+        const tag = Buffer.from(tagB64, "base64url");
+        const data = Buffer.from(dataB64, "base64url");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(data), d.final()]).toString("utf8");
+      };
+
+      const tryDecryptAny = (v) => {
+        if (v == null || v === "") return null;
+        const s = String(v);
+        try {
+          if (s.includes(".")) return decryptGCM(s);
+          if (s.includes(":")) return decryptLegacy(s);
+          return s;
+        } catch {
+          return null;
+        }
+      };
+
       const merged = registrations.map((reg) => {
         const regIdStr = String(reg._id);
         const pay = payByRegId.get(regIdStr) || null;
@@ -948,19 +994,35 @@ const DoctorBookingController = {
             transactionId: pay.transactionId,
           };
 
+        // Decrypt currentAddress if exists
+        const beneficiaryDecrypted = reg.beneficiary ? {
+          ...reg.beneficiary,
+          currentAddress: tryDecryptAny(reg.beneficiary.currentAddress) || reg.beneficiary.currentAddress
+        } : null;
+
+        const registrantDecrypted = reg.registrant && typeof reg.registrant === 'object' ? {
+          ...reg.registrant,
+          currentAddress: tryDecryptAny(reg.registrant.currentAddress) || reg.registrant.currentAddress
+        } : reg.registrant;
+
         return {
           ...reg,
+          beneficiary: beneficiaryDecrypted,
+          registrant: registrantDecrypted,
           payment: paymentObj || undefined,
           paymentMethod: pay?.paymentMethod,
           paymentStatus: pay?.status,
         };
       });
 
+      console.log(TAG_LOG, 'Returning', merged.length, 'bookings');
+
       return res.json({
         success: true,
         data: merged,
       });
     } catch (err) {
+      console.error(TAG_LOG, 'ERROR:', err);
       return res.status(500).json({
         success: false,
         message: "Lỗi lấy lịch tư vấn theo người cao tuổi",
