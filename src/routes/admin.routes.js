@@ -35,6 +35,8 @@ router.post("/supporters/bulk-import", upload.single('file'), AdminController.bu
 
 // Admin doctor management routes
 router.post("/doctors", AdminController.createDoctor);
+router.get("/doctors/:userId", AdminController.getDoctorProfile);
+router.get("/doctors/:doctorId/completed-consultations", AdminController.getCompletedConsultationsByDoctor);
 router.post("/doctors/bulk-import", upload.single('file'), AdminController.bulkImportDoctors);
 
 // Admin: all users

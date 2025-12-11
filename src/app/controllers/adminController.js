@@ -457,13 +457,14 @@ const AdminController = {
     try {
       
       const users = await User.find({})
-        .select("fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc gender dateOfBirth createdAt avatar +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
+        .select("_id fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc gender dateOfBirth createdAt avatar +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
         .sort({ createdAt: -1 });
 
       const decrypted = decryptUserData(users);
       
       return res.status(200).json({ success: true, data: decrypted });
     } catch (err) {
+      console.error("❌ [AdminController.getAllUsers] Error:", err);
       return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi lấy danh sách người dùng" });
     }
   },
@@ -478,7 +479,7 @@ const AdminController = {
       }
       
       const user = await User.findById(userId)
-        .select("fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc gender dateOfBirth createdAt avatar identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc");
+        .select("_id fullName role isActive phoneNumber phoneNumberEnc email emailEnc address addressEnc gender dateOfBirth createdAt avatar identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc");
       
       if (!user) {
         return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
@@ -496,7 +497,7 @@ const AdminController = {
   // Admin: Tạo tài khoản supporter
   createSupporter: async (req, res) => {
     try {
-      const { fullName, phoneNumber, gender, password, email, dateOfBirth, address, identityCard } = req.body;
+      const { fullName, phoneNumber, gender, password, email, dateOfBirth, address, identityCard, experience } = req.body;
 
       if (!fullName || !phoneNumber || !gender || !password || !dateOfBirth || !identityCard) {
         return res.status(400).json({
@@ -566,7 +567,15 @@ const AdminController = {
 
       const newUser = await User.create(userData);
 
-      // Không tạo SupporterProfile ở đây nữa
+      // Tạo SupporterProfile
+      const SupporterProfile = require('../models/SupporterProfile');
+      await SupporterProfile.create({
+        user: newUser._id,
+        experience: {
+          totalYears: experience?.totalYears || 0,
+          description: experience?.description || ''
+        }
+      });
 
       return res.status(201).json({
         success: true,
@@ -588,7 +597,10 @@ const AdminController = {
   // Admin: Tạo tài khoản doctor
   createDoctor: async (req, res) => {
     try {
-      const { fullName, phoneNumber, gender, password, email, dateOfBirth, address, identityCard } = req.body;
+      const { 
+        fullName, phoneNumber, gender, password, email, dateOfBirth, address, identityCard,
+        specialization, experience, description
+      } = req.body;
 
       if (!fullName || !phoneNumber || !gender || !password || !dateOfBirth || !identityCard) {
         return res.status(400).json({
@@ -665,15 +677,36 @@ const AdminController = {
 
       const newUser = await User.create(userData);
 
-      // Không tạo DoctorProfile ở đây nữa
+      // Tạo DoctorProfile với đầy đủ thông tin
+      const DoctorProfile = require("../models/DoctorProfile");
+      
+      // Chuẩn bị dữ liệu profile
+      const profileData = {
+        user: newUser._id,
+        specialization: specialization?.trim() || "",
+        experience: parseInt(experience) || 0,
+        description: description?.trim() || "",
+        ratingStats: {
+          averageRating: 0,
+          totalRatings: 0,
+        },
+        stats: {
+          totalConsultations: 0,
+        }
+      };
+
+      const doctorProfile = await DoctorProfile.create(profileData);
 
       return res.status(201).json({
         success: true,
-        message: "Tạo tài khoản doctor thành công",
+        message: "Tạo tài khoản doctor và hồ sơ chuyên môn thành công",
         data: {
           userId: newUser._id,
+          doctorProfileId: doctorProfile._id,
           fullName: newUser.fullName,
           role: newUser.role,
+          specialization: profileData.specialization,
+          experience: profileData.experience,
           isActive: newUser.isActive
         }
       });
@@ -719,6 +752,114 @@ const AdminController = {
     }
   },
 
+  // Admin: Lấy thông tin DoctorProfile của bác sĩ
+  getDoctorProfile: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "ID người dùng không hợp lệ" });
+      }
+
+      const user = await User.findById(userId)
+        .select("fullName phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc role isActive avatar gender dateOfBirth createdAt +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc");
+
+      if (!user) {
+        return res.status(404).json({ success: false, message: "Không tìm thấy người dùng" });
+      }
+      if (user.role !== "doctor") {
+        return res.status(400).json({ success: false, message: "Người dùng này không phải là bác sĩ" });
+      }
+
+      const DoctorProfile = require("../models/DoctorProfile");
+      const doctorProfile = await DoctorProfile.findOne({ user: userId });
+      const [decryptedUser] = decryptUserData([user]);
+
+      const combinedData = {
+        user: decryptedUser,
+        profile: doctorProfile?.toObject() || null
+      };
+
+      return res.status(200).json({ success: true, data: combinedData });
+
+    } catch (err) {
+      console.error("❌ [AdminController.getDoctorProfile] Error:", err);
+      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi lấy thông tin bác sĩ" });
+    }
+  },
+
+  // Admin: Lấy danh sách RegistrationConsultation đã hoàn thành của bác sĩ
+  getCompletedConsultationsByDoctor: async (req, res) => {
+    try {
+      const { doctorId } = req.params;
+      if (!isValidObjectId(doctorId)) {
+        return res.status(400).json({ success: false, message: "ID bác sĩ không hợp lệ" });
+      }
+
+      const RegistrationConsultation = require("../models/RegistrationConsulation");
+      
+      let consultations = await RegistrationConsultation.find({ 
+        doctor: doctorId,
+        status: 'completed'
+      })
+        .populate({
+          path: 'doctor',
+          select: 'fullName role avatar phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
+        .populate({
+          path: 'beneficiary',
+          select: 'fullName role dateOfBirth phoneNumber phoneNumberEnc email emailEnc avatar +phoneNumberEnc +emailEnc'
+        })
+        .populate({
+          path: 'registrant',
+          select: 'fullName role phoneNumber phoneNumberEnc email emailEnc +phoneNumberEnc +emailEnc'
+        })
+        .sort({ registeredAt: -1 })
+        .lean();
+
+      // Decrypt all populated users in batch
+      const usersToDecrypt = [];
+      consultations.forEach(c => {
+        if (c.doctor && c.doctor._id) usersToDecrypt.push(c.doctor);
+        if (c.beneficiary && c.beneficiary._id) usersToDecrypt.push(c.beneficiary);
+        if (c.registrant && c.registrant._id) usersToDecrypt.push(c.registrant);
+      });
+      
+      // Unique users
+      const uniq = {};
+      const uniqueUsers = [];
+      usersToDecrypt.forEach(u => {
+        if (!u || !u._id) return;
+        const id = String(u._id);
+        if (!uniq[id]) {
+          uniq[id] = true;
+          uniqueUsers.push(u);
+        }
+      });
+
+      const decryptedUsers = decryptUserData(uniqueUsers);
+      const decryptMap = {};
+      decryptedUsers.forEach(u => {
+        decryptMap[String(u._id)] = u;
+      });
+
+      const decryptedConsultations = consultations.map(c => ({
+        ...c,
+        doctor: c.doctor ? decryptMap[String(c.doctor._id)] || c.doctor : null,
+        beneficiary: c.beneficiary ? decryptMap[String(c.beneficiary._id)] || c.beneficiary : null,
+        registrant: c.registrant ? decryptMap[String(c.registrant._id)] || c.registrant : null
+      }));
+
+      return res.status(200).json({
+        success: true,
+        data: decryptedConsultations
+      });
+
+    } catch (err) {
+      console.error("❌ [AdminController.getCompletedConsultationsByDoctor] Error:", err);
+      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi lấy danh sách tư vấn" });
+    }
+  },
+
   // Admin: Cập nhật trạng thái hoạt động của bất kỳ user nào
   setUserActive: async (req, res) => {
     try {
@@ -754,7 +895,7 @@ const AdminController = {
   getAllSupporters: async (req, res) => {
     try {      
       const supporters = await User.find({ role: "supporter" })
-        .select("fullName phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc isActive createdAt gender dateOfBirth +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
+        .select("_id fullName phoneNumber phoneNumberEnc email emailEnc address addressEnc identityCard identityCardEnc currentAddress currentAddressEnc hometown hometownEnc isActive createdAt gender dateOfBirth +phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc")
         .sort({ createdAt: -1 });
       const decryptedSupporters = decryptUserData(supporters);
       
@@ -1553,7 +1694,7 @@ const AdminController = {
       // Lấy thông tin profile của các bác sĩ
       const doctorIds = doctors.map(d => d._id);
       const doctorProfiles = await DoctorProfile.find({ user: { $in: doctorIds } })
-        .select('user specializations experience hospitalName ratingStats consultationFees')
+        .select('user specialization experience description ratingStats')
         .lean();
 
       // Tạo map để dễ dàng lookup
@@ -1596,11 +1737,9 @@ const AdminController = {
           avatar: doctor.avatar,
           phoneNumber: doctor.phoneNumber,
           email: doctor.email,
-          specializations: profile?.specializations || 'N/A',
+          specialization: profile?.specialization || '',
           experience: profile?.experience || 0,
-          hospitalName: profile?.hospitalName || 'N/A',
           ratingStats: profile?.ratingStats || { averageRating: 0, totalRatings: 0 },
-          consultationFees: profile?.consultationFees || { online: 0, offline: 0 },
           distance: distance ? parseFloat(distance.toFixed(2)) : null, // km
           hasLocation: !!doctorLocation
         };

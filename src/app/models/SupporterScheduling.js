@@ -29,7 +29,7 @@ const supporterSchedulingSchema = new Schema(
     status: {
       type: String,
       enum: STATUS,
-      default: 'pending',
+      default: 'confirmed',
     },
 
     notes: { type: String, default: '' },
