@@ -28,10 +28,10 @@ const mongoose = require('mongoose');
 const ConsultationPrice = mongoose.model('ConsultationPrice', ConsultationPriceSchema);
 
 ConsultationPrice.ensureDefault = async function ensureDefault() {
-  const existing = await this.findOne({ serviceKey: 'doctor_consultation' });
+  const existing = await this.findOne({ serviceName: 'doctor_consultation' });
   if (existing) return existing;
 
-  const doc = new this({ serviceKey: 'doctor_consultation' });
+  const doc = new this({ serviceName: 'doctor_consultation' });
   await doc.save();
   return doc;
 };

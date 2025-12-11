@@ -8,10 +8,176 @@ const Payment = require("../models/Payment");
 const RegistrationConsulation = require("../models/RegistrationConsulation");
 const ConsultationPrice = require("../models/ConsultationPrice");
 const Conversation = require("../models/Conversation");
+const ConsultationSummary = require("../models/ConsultationSummary");
+const socketConfig = require("../../config/socket/socketConfig");
 
 function getUserIdFromReq(req) {
   if (!req || !req.user) return null;
   return req.user._id || req.user.id || req.user.userId || null;
+}
+
+function parseLocalDateString(value) {
+  if (!value) return null;
+  const buildMidday = (year, monthIndex, day) => {
+    if (
+      Number.isNaN(year) ||
+      Number.isNaN(monthIndex) ||
+      Number.isNaN(day)
+    ) {
+      return null;
+    }
+    // Lưu lúc 12:00 trưa theo giờ local để tránh bị lùi ngày khi hiển thị UTC
+    return new Date(year, monthIndex, day, 12, 0, 0, 0);
+  };
+
+  if (value instanceof Date) {
+    return buildMidday(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+    );
+  }
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [yStr, mStr, dStr] = value.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr) - 1;
+    const d = Number(dStr);
+    return buildMidday(y, m, d);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return buildMidday(
+    parsed.getFullYear(),
+    parsed.getMonth(),
+    parsed.getDate(),
+  );
+}
+
+function emitBookingUpdated(registration, eventName = "consultation_booking_updated") {
+  if (!registration || !socketConfig || typeof socketConfig.emitToUser !== "function") return;
+
+  const ids = new Set();
+
+  const addId = (field) => {
+    if (!field) return;
+    if (typeof field === "string") {
+      ids.add(field);
+    } else if (field._id) {
+      ids.add(String(field._id));
+    } else {
+      ids.add(String(field));
+    }
+  };
+
+  addId(registration.doctor);
+  addId(registration.beneficiary);
+  addId(registration.registrant);
+
+  if (!ids.size) return;
+
+  const payload = {
+    registrationId: registration._id,
+    status: registration.status,
+    paymentStatus: registration.paymentStatus,
+    cancelReason: registration.cancelReason,
+  };
+
+  ids.forEach((userId) => {
+    try {
+      socketConfig.emitToUser(userId, eventName, payload);
+    } catch (err) {
+      // Không để lỗi socket làm hỏng luồng HTTP
+      // eslint-disable-next-line no-console
+      console.error("[DoctorBookingController][emitBookingUpdated] Socket emit error:", err.message);
+    }
+  });
+}
+
+async function autoCancelOverdueWithoutSummary(registrations) {
+  if (!Array.isArray(registrations) || !registrations.length) return registrations;
+
+  const now = new Date();
+
+  const overdueIds = [];
+
+  registrations.forEach((reg) => {
+    if (!reg || reg.status !== "confirmed" || !reg.scheduledDate || !reg.slot) {
+      return;
+    }
+
+    const base = new Date(reg.scheduledDate);
+    if (Number.isNaN(base.getTime())) return;
+
+    const end = new Date(base);
+    
+    if (reg.slot === "morning") {
+      end.setHours(11, 0, 0, 0);
+    } else if (reg.slot === "afternoon") {
+      end.setHours(16, 0, 0, 0);
+    } else {
+      return;
+    }
+console.log("end day 2", end);
+    if (now.getTime() > end.getTime()) {
+      overdueIds.push(String(reg._id));
+    }
+  });
+
+  if (!overdueIds.length) return registrations;
+
+  const summaries = await ConsultationSummary.find({
+    registration: { $in: overdueIds },
+  })
+    .select("registration _id")
+    .lean();
+
+  const hasSummary = new Set(summaries.map((s) => String(s.registration)));
+
+  const finalIds = overdueIds.filter((id) => !hasSummary.has(id));
+  if (!finalIds.length) return registrations;
+
+  const CANCEL_REASON = "Bác sĩ đi trễ lịch hẹn";
+
+  await RegistrationConsulation.updateMany(
+    { _id: { $in: finalIds }, status: "confirmed" },
+    {
+      $set: {
+        status: "cancelled",
+        paymentStatus: "refunded",
+        cancelReason: CANCEL_REASON,
+      },
+    },
+  );
+
+  await Payment.updateMany(
+    {
+      serviceType: "consultation",
+      serviceId: { $in: finalIds },
+      status: { $ne: "refunded" },
+    },
+    {
+      $set: { status: "refunded" },
+    },
+  );
+
+  const idSet = new Set(finalIds);
+  const updatedRegs = registrations.map((reg) => {
+    if (!reg || !idSet.has(String(reg._id))) return reg;
+    const updated = {
+      ...reg,
+      status: "cancelled",
+      paymentStatus: "refunded",
+      cancelReason: CANCEL_REASON,
+    };
+
+    emitBookingUpdated(updated);
+    return updated;
+  });
+
+  return updatedRegs;
 }
 
 const DoctorBookingController = {
@@ -103,10 +269,14 @@ const DoctorBookingController = {
       }
 
       const today = new Date();
-      const startDay = fromDate ? new Date(fromDate) : today;
-      const endDay = toDate ? new Date(toDate) : new Date(startDay);
+      const startDay = fromDate
+        ? parseLocalDateString(fromDate)
+        : parseLocalDateString(today);
+      const endDay = toDate
+        ? parseLocalDateString(toDate)
+        : parseLocalDateString(startDay);
 
-      if (Number.isNaN(startDay.getTime()) || Number.isNaN(endDay.getTime())) {
+      if (!startDay || !endDay) {
         return res.status(400).json({
           success: false,
           message: "fromDate/toDate không hợp lệ",
@@ -135,7 +305,11 @@ const DoctorBookingController = {
       registrations.forEach((r) => {
         if (!r.scheduledDate) return;
         const d = new Date(r.scheduledDate);
-        const key = d.toISOString().slice(0, 10);
+        if (Number.isNaN(d.getTime())) return;
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const key = `${y}-${m}-${day}`;
         if (!busyByDay.has(key)) {
           busyByDay.set(key, { morning: false, afternoon: false });
         }
@@ -154,7 +328,10 @@ const DoctorBookingController = {
       const LIMIT_MS = LIMIT_MINUTES * 60 * 1000;
 
       while (dayCursor <= endDay) {
-        const dayKey = dayCursor.toISOString().slice(0, 10);
+        const y = dayCursor.getFullYear();
+        const m = String(dayCursor.getMonth() + 1).padStart(2, "0");
+        const d = String(dayCursor.getDate()).padStart(2, "0");
+        const dayKey = `${y}-${m}-${d}`;
         const busy = busyByDay.get(dayKey) || { morning: false, afternoon: false };
 
         const freeSlots = [];
@@ -163,7 +340,7 @@ const DoctorBookingController = {
           const start = new Date(dayCursor);
           start.setHours(8, 0, 0, 0);
           const end = new Date(dayCursor);
-          end.setHours(10, 0, 0, 0);
+          end.setHours(11, 0, 0, 0);
 
           if (start.getTime() - now.getTime() >= LIMIT_MS) {
             freeSlots.push({
@@ -216,7 +393,7 @@ const DoctorBookingController = {
   logDefaultConsultationPrice: async () => {
     try {
       const doc = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -242,7 +419,7 @@ const DoctorBookingController = {
   getDefaultConsultationPrice: async (req, res) => {
     try {
       const doc = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -309,13 +486,12 @@ const DoctorBookingController = {
           .json({ success: false, message: "Thiếu scheduledDate" });
       }
 
-      const dateObj = new Date(scheduledDate);
-      if (Number.isNaN(dateObj.getTime())) {
+      const dateObj = parseLocalDateString(scheduledDate);
+      if (!dateObj) {
         return res
           .status(400)
           .json({ success: false, message: "scheduledDate không hợp lệ" });
       }
-      dateObj.setHours(0, 0, 0, 0);
 
       const registrantUserId =
         registrantId && mongoose.Types.ObjectId.isValid(registrantId)
@@ -337,7 +513,7 @@ const DoctorBookingController = {
       }
 
       const priceConfig = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -440,7 +616,34 @@ const DoctorBookingController = {
         }
       } catch (autoErr) {
       }
-     
+
+      try {
+        const eventName = "consultation_booking_created";
+        const payload = {
+          registrationId: registration._id,
+          status: registration.status,
+          paymentStatus: registration.paymentStatus,
+        };
+
+        const notifyIds = new Set([
+          String(doctorId),
+          String(elderlyId),
+          String(registrantUserId),
+        ]);
+
+        notifyIds.forEach((uid) => {
+          if (!uid) return;
+          try {
+            socketConfig.emitToUser(uid, eventName, payload);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error("[DoctorBookingController][createRegistration] Socket emit error:", err.message);
+          }
+        });
+      } catch (socketErr) {
+        // eslint-disable-next-line no-console
+        console.error("[DoctorBookingController][createRegistration] Socket outer error:", socketErr.message);
+      }
 
       return res.status(201).json({
         success: true,
@@ -565,7 +768,7 @@ const DoctorBookingController = {
 
    
       if (role === "doctor") {
-        const doctorRegs = await RegistrationConsulation.find({
+        let doctorRegs = await RegistrationConsulation.find({
           doctor: userId,
         })
           .populate({
@@ -582,6 +785,8 @@ const DoctorBookingController = {
           })
           .sort({ registeredAt: -1, createdAt: -1 })
           .lean();
+
+        doctorRegs = await autoCancelOverdueWithoutSummary(doctorRegs);
 
         const regIds = doctorRegs.map((r) => String(r._id));
 
@@ -649,6 +854,8 @@ const DoctorBookingController = {
         })
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
+
+      registrations = await autoCancelOverdueWithoutSummary(registrations);
 
       const registrantIds = [];
       registrations.forEach(reg => {
@@ -880,6 +1087,8 @@ const DoctorBookingController = {
         })
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
+
+      registrations = await autoCancelOverdueWithoutSummary(registrations);
 
       const registrantIdList = [];
       registrations.forEach((reg) => {
@@ -1142,6 +1351,8 @@ const DoctorBookingController = {
         .populate("beneficiary")
         .populate("registrant")
         .lean();
+
+      emitBookingUpdated(updatedRegistration);
 
       console.log(
         LOG_TAG,
