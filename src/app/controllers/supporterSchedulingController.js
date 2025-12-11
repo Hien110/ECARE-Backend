@@ -383,7 +383,7 @@ const schedulingController = {
         )
         .populate(
           "elderly",
-          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar"
+          "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar currentAddress"
         )
         .populate("registrant", "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar")
         .populate("service", "name price numberOfDays")
@@ -458,6 +458,9 @@ const schedulingController = {
       const emailElderly = scheduling?.elderly?.emailEnc
         ? tryDecryptAny(scheduling?.elderly?.emailEnc)
         : "";
+      const currentAddressElderly = scheduling?.elderly?.currentAddress
+        ? tryDecryptAny(scheduling?.elderly?.currentAddress)
+        : "";
 
       // Tạo response
       const responseScheduling = {
@@ -467,6 +470,10 @@ const schedulingController = {
         emailSupporter: emailSupporter,
         phoneNumberElderly: phoneNumberElderly,
         emailElderly: emailElderly,
+        elderly: scheduling.elderly ? {
+          ...scheduling.elderly,
+          currentAddress: currentAddressElderly
+        } : null,
       };
 
       delete responseScheduling.phoneNumberEnc;
