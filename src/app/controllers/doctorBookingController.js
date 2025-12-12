@@ -57,6 +57,54 @@ function parseLocalDateString(value) {
   );
 }
 
+// Hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại 1-1
+async function endDoctorRelationshipAndConversation(registration, session) {
+  if (!registration || !registration.doctor) return;
+
+  const doctorId = registration.doctor;
+
+  const patientIds = new Set();
+  if (registration.beneficiary) patientIds.add(String(registration.beneficiary));
+  if (registration.registrant) patientIds.add(String(registration.registrant));
+
+  const ids = Array.from(patientIds).filter(Boolean);
+  if (!ids.length) return;
+
+  for (const pid of ids) {
+    const patientId = pid;
+
+    // Cập nhật Relationship (elderly = bệnh nhân/registrant, family = doctor, relationship = "Bác sĩ")
+    await Relationship.updateMany(
+      {
+        elderly: patientId,
+        family: doctorId,
+        relationship: "Bác sĩ",
+        status: { $ne: "cancelled" },
+      },
+      {
+        $set: { status: "cancelled" },
+      },
+      { session },
+    );
+
+    // Tắt hội thoại 1-1 giữa bác sĩ và bệnh nhân
+    await Conversation.updateMany(
+      {
+        isActive: true,
+        $and: [
+          { participants: { $elemMatch: { user: patientId } } },
+          { participants: { $elemMatch: { user: doctorId } } },
+        ],
+        "participants.2": { $exists: false },
+      },
+      {
+        $set: { isActive: false },
+      },
+      { session },
+    );
+  }
+}
+
 function emitBookingUpdated(registration, eventName = "consultation_booking_updated") {
   if (!registration || !socketConfig || typeof socketConfig.emitToUser !== "function") return;
 
@@ -1428,6 +1476,9 @@ const DoctorBookingController = {
             "ℹ️ Không tìm thấy payment cho registration này",
           );
         }
+
+        // Khi hủy đăng ký tư vấn: hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại
+        await endDoctorRelationshipAndConversation(registration, session);
       } else if (["in_progress", "completed"].includes(desiredStatus)) {
         finalRegistrationStatus =
           desiredStatus === "completed" ? "completed" : "confirmed";
@@ -1443,6 +1494,22 @@ const DoctorBookingController = {
           "\n  status =",
           registration.status,
         );
+
+        // Trường hợp chuyển sang completed: kiểm tra theo durationDays để tự hủy quan hệ & hội thoại
+        if (finalRegistrationStatus === "completed") {
+          const durationDays = RegistrationConsulation.schema.path("durationDays").defaultValue || 0;
+          if (durationDays > 0) {
+            const startDate = registration.registeredAt || registration.createdAt || new Date();
+            const endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + durationDays);
+            const now = new Date();
+            if (now.getTime() >= endDate.getTime()) {
+              await endDoctorRelationshipAndConversation(registration, session);
+            }
+          } else {
+            await endDoctorRelationshipAndConversation(registration, session);
+          }
+        }
       }
 
       await session.commitTransaction();
