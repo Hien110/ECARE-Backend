@@ -24,7 +24,7 @@ const ratingSchema = new mongoose.Schema({
   // Id dịch vụ tư vấn bác sĩ
   serviceConsultationId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'RegistrationHealthPackage',
+    ref: 'RegistrationConsulation',
     default: null
   },
   // Loại đánh giá

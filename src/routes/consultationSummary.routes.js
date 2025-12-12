@@ -10,8 +10,7 @@ router.get(
 
 router.use(authenticateToken);
 
-
-
+router.get('/by-elderly/:elderlyId', consultationSummaryController.getSummariesByElderly);
 
 router.post('/:registrationId', consultationSummaryController.upsertByRegistration);
 
