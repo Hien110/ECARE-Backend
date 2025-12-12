@@ -536,7 +536,70 @@ const schedulingController = {
       }
 
       scheduling.status = status;
+      
+      // ✅ Khi hoàn thành công việc: đổi paymentStatus thành paid
+      if (status === "completed") {
+        scheduling.paymentStatus = "paid";
+      }
+      
       await scheduling.save();
+
+      // ✅ Khi hoàn thành công việc: đổi relationship thành cancelled + xóa conversation
+      if (status === "completed") {
+        const TAG_LOG = "[updateSchedulingStatus][completed]";
+        console.log(TAG_LOG, "Scheduling completed. Processing relationships and conversations...");
+
+        try {
+          // 1️⃣ Đổi relationship với elderly thành cancelled
+          if (scheduling.elderly) {
+            const relElderly = await Relationship.findOne({
+              supporter: scheduling.supporter,
+              elderly: scheduling.elderly,
+            });
+            
+            if (relElderly) {
+              relElderly.status = "cancelled";
+              await relElderly.save();
+              console.log(TAG_LOG, "Updated relationship with elderly to cancelled");
+            }
+
+            // Xóa conversation giữa supporter và elderly
+            await Conversation.deleteMany({
+              $and: [
+                { "participants.user": scheduling.supporter },
+                { "participants.user": scheduling.elderly },
+              ],
+            });
+            console.log(TAG_LOG, "Deleted conversation with elderly");
+          }
+
+          // 2️⃣ Đổi relationship với registrant thành cancelled
+          if (scheduling.registrant) {
+            const relRegistrant = await Relationship.findOne({
+              supporter: scheduling.supporter,
+              elderly: scheduling.registrant, // registrant có thể là elderly hoặc family
+            });
+            
+            if (relRegistrant) {
+              relRegistrant.status = "cancelled";
+              await relRegistrant.save();
+              console.log(TAG_LOG, "Updated relationship with registrant to cancelled");
+            }
+
+            // Xóa conversation giữa supporter và registrant
+            await Conversation.deleteMany({
+              $and: [
+                { "participants.user": scheduling.supporter },
+                { "participants.user": scheduling.registrant },
+              ],
+            });
+            console.log(TAG_LOG, "Deleted conversation with registrant");
+          }
+        } catch (err) {
+          console.error(TAG_LOG, "Error processing relationships/conversations:", err);
+          // Không fail request, chỉ log warning
+        }
+      }
 
       const plain = toPlain(scheduling);
       if (plain.address) plain.address = tryDecryptField(plain.address);
