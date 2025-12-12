@@ -10,6 +10,7 @@ const ConsultationPrice = require("../models/ConsultationPrice");
 const Conversation = require("../models/Conversation");
 const ConsultationSummary = require("../models/ConsultationSummary");
 const socketConfig = require("../../config/socket/socketConfig");
+const { tryDecryptField } = require("./userController");
 
 function getUserIdFromReq(req) {
   if (!req || !req.user) return null;
@@ -534,7 +535,7 @@ const DoctorBookingController = {
         beneficiary: elderlyId,
         scheduledDate: dateObj,
         slot,
-        doctorNote: note || "",
+        note: note || "",
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
         price: resolvedPrice,
@@ -673,34 +674,50 @@ const DoctorBookingController = {
       if (!doctorUsers.length) {
         return res.json({ success: true, data: [] });
       }
+      const doctorIds = doctorUsers.map((u) => u._id);
 
-      let result = doctorUsers.map((u) => ({
-        doctorId: u._id,
-        fullName: u.fullName,
-      }));
+      // Lấy thêm thông tin hồ sơ & thống kê đánh giá để hiển thị ở màn chọn bác sĩ
+      const profiles = await DoctorProfile.find({
+        user: { $in: doctorIds },
+      })
+        .select("user specialization experience ratingStats")
+        .lean();
+
+      const profileMap = new Map();
+      profiles.forEach((p) => {
+        if (!p || !p.user) return;
+        profileMap.set(String(p.user), p);
+      });
+
+      let result = doctorUsers.map((u) => {
+        const profile = profileMap.get(String(u._id));
+        const ratingStats = (profile && profile.ratingStats) || {};
+
+        return {
+          doctorId: u._id,
+          fullName: u.fullName,
+          specialization: profile ? profile.specialization || null : null,
+          experience: profile ? profile.experience || null : null,
+          ratingStats: {
+            averageRating:
+              typeof ratingStats.averageRating === "number"
+                ? ratingStats.averageRating
+                : 0,
+            totalRatings:
+              typeof ratingStats.totalRatings === "number"
+                ? ratingStats.totalRatings
+                : 0,
+          },
+        };
+      });
 
       if (specialization) {
         const keyword = String(specialization).toLowerCase();
 
-        const doctorIds = doctorUsers.map((u) => u._id);
-        const profiles = await DoctorProfile.find({
-          user: { $in: doctorIds },
-        })
-          .select("user specializations")
-          .lean();
-
-        const allowIds = new Set();
-        profiles.forEach((p) => {
-          const specs = Array.isArray(p.specializations)
-            ? p.specializations
-            : [];
-          const matched = specs.some((s) =>
-            String(s).toLowerCase().includes(keyword),
-          );
-          if (matched) allowIds.add(String(p.user));
+        result = result.filter((d) => {
+          const spec = d.specialization || "";
+          return String(spec).toLowerCase().includes(keyword);
         });
-
-        result = result.filter((d) => allowIds.has(String(d.doctorId)));
       }
 
       return res.json({
@@ -777,7 +794,7 @@ const DoctorBookingController = {
           })
           .populate({
             path: "beneficiary",
-            select: "fullName avatar gender dateOfBirth role",
+            select: "fullName avatar gender dateOfBirth role currentAddress",
           })
           .populate({
             path: "registrant",
@@ -803,11 +820,37 @@ const DoctorBookingController = {
         });
 
         const mergedDoctor = doctorRegs.map((reg) => {
+          const beneficiary = reg.beneficiary || null;
+          const registrant = reg.registrant || null;
+
+          const beneficiaryWithAddress = beneficiary
+            ? {
+                ...beneficiary,
+                currentAddress:
+                  beneficiary.currentAddress != null
+                    ? tryDecryptField(beneficiary.currentAddress)
+                    : beneficiary.currentAddress,
+              }
+            : null;
+
+          const registrantWithAddress =
+            registrant && typeof registrant === "object"
+              ? {
+                  ...registrant,
+                  currentAddress:
+                    registrant.currentAddress != null
+                      ? tryDecryptField(registrant.currentAddress)
+                      : registrant.currentAddress,
+                }
+              : registrant;
+
           const regId = String(reg._id);
           const pay = payByReg.get(regId) || null;
 
           return {
             ...reg,
+            beneficiary: beneficiaryWithAddress,
+            registrant: registrantWithAddress,
             payment: pay
               ? {
                   method: pay.paymentMethod,

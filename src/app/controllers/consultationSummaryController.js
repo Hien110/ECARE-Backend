@@ -22,6 +22,10 @@ function mapUserForResponse(user) {
     mapped.phoneNumber = tryDecryptField(mapped.phoneNumber);
   }
 
+  if (mapped.currentAddress != null) {
+    mapped.currentAddress = tryDecryptField(mapped.currentAddress);
+  }
+
   return mapped;
 }
 
@@ -121,15 +125,18 @@ const consultationSummaryController = {
       const registration = await RegistrationConsulation.findById(registrationId)
         .populate({
           path: 'doctor',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .populate({
           path: 'beneficiary',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .populate({
           path: 'registrant',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .lean();
 
@@ -246,17 +253,17 @@ const consultationSummaryController = {
             {
               path: 'doctor',
               select:
-                'fullName avatar gender dateOfBirth role phoneNumber isActive',
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
             },
             {
               path: 'beneficiary',
               select:
-                'fullName avatar gender dateOfBirth role phoneNumber isActive',
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
             },
             {
               path: 'registrant',
               select:
-                'fullName avatar gender dateOfBirth role phoneNumber isActive',
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
             },
           ],
         })

@@ -12,7 +12,7 @@ const RegistrationConsulationSchema = new mongoose.Schema({
     enum: [ 'confirmed', 'completed', 'cancelled'],
     default: 'confirmed', 
   },
-
+  note: { type: String, default: '' },
   slot: {
     type: String,
     enum: ['morning', 'afternoon'],

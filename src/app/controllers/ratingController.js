@@ -1,5 +1,6 @@
 const Rating = require("../models/Rating");
 const SupporterProfile = require("../models/SupporterProfile");
+const SupporterScheduling = require("../models/SupporterScheduling");
 
 const RatingController = {
   // tạo đánh giá dịch vụ hỗ trợ
@@ -8,14 +9,73 @@ const RatingController = {
       const {
         reviewer,
         reviewee,
-        ratingType,
         rating,
         comment,
         serviceSupportId,
       } = req.body;
+      const authUserId = req.user?.userId?.toString() || reviewer?.toString();
+      if (!authUserId) {
+        return res
+          .status(401)
+          .json({ success: false, message: "Unauthorized" });
+      }
+
+      if (!serviceSupportId) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu serviceSupportId cho lịch hỗ trợ",
+        });
+      }
+
+      if (!rating || rating < 1 || rating > 5) {
+        return res.status(400).json({
+          success: false,
+          message: "rating phải trong khoảng 1..5",
+        });
+      }
+
+      const scheduling = await SupporterScheduling.findById(serviceSupportId).lean();
+      if (!scheduling) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Không tìm thấy lịch hỗ trợ" });
+      }
+
+      if (scheduling.status !== "completed") {
+        return res.status(400).json({
+          success: false,
+          message: "Chỉ được đánh giá khi lịch hỗ trợ đã hoàn thành",
+        });
+      }
+
+      if (scheduling.registrant?.toString() !== authUserId) {
+        return res.status(403).json({
+          success: false,
+          message: "Chỉ người đã đặt lịch mới được đánh giá dịch vụ này",
+        });
+      }
+
+      const existing = await Rating.findOne({
+        reviewer: authUserId,
+        serviceSupportId,
+        ratingType: "support_service",
+        status: { $ne: "deleted" },
+      });
+
+      if (existing) {
+        return res.status(400).json({
+          success: false,
+          message: "Bạn đã đánh giá dịch vụ hỗ trợ này rồi",
+        });
+      }
+
+      const reviewerId = authUserId;
+      const revieweeId = (reviewee || scheduling.supporter)?.toString();
+      const ratingType = "support_service";
+
       const newRating = new Rating({
-        reviewer,
-        reviewee,
+        reviewer: reviewerId,
+        reviewee: revieweeId,
         ratingType,
         rating,
         comment,
@@ -24,22 +84,20 @@ const RatingController = {
       await newRating.save();
 
       // Cập nhập tổng đánh giá và điểm trung bình trong SupporterProfile
-      if (ratingType === "support_service") {
-        const supporterProfile = await SupporterProfile.findOne({
-          user: reviewee,
-        });
-        if (supporterProfile) {
-          const totalRatings = supporterProfile.ratingStats.totalRatings + 1;
-          const totalRatingScore =
-            supporterProfile.ratingStats.averageRating *
-              supporterProfile.ratingStats.totalRatings +
-            rating;
-          const averageRating = totalRatingScore / totalRatings;
-          supporterProfile.ratingStats.totalRatings = totalRatings;
-          supporterProfile.ratingStats.averageRating = averageRating;
-          supporterProfile.ratingStats.lastRatingAt = new Date();
-          await supporterProfile.save();
-        }
+      const supporterProfile = await SupporterProfile.findOne({
+        user: revieweeId,
+      });
+      if (supporterProfile) {
+        const totalRatings = supporterProfile.ratingStats.totalRatings + 1;
+        const totalRatingScore =
+          supporterProfile.ratingStats.averageRating *
+            supporterProfile.ratingStats.totalRatings +
+          rating;
+        const averageRating = totalRatingScore / totalRatings;
+        supporterProfile.ratingStats.totalRatings = totalRatings;
+        supporterProfile.ratingStats.averageRating = averageRating;
+        supporterProfile.ratingStats.lastRatingAt = new Date();
+        await supporterProfile.save();
       }
 
       res.status(201).json({ success: true, data: newRating });
