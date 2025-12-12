@@ -78,13 +78,11 @@ function buildDecryptedUser(userDoc) {
   if (!userDoc) return null;
   const u = typeof userDoc.toObject === 'function' ? userDoc.toObject() : { ...userDoc };
 
-  const phoneCipher   = pick(u, ['phoneNumberEnc', 'phoneNumber']);
   const addrCipher    = pick(u, ['addressEnc', 'address']);
   const curAddrCipher = pick(u, ['currentAddressEnc', 'currentAddress']);
 
   const decryptedUser = {
     ...u,
-    phoneNumber:    deepDecrypt(phoneCipher),
     address:        deepDecrypt(addrCipher),
     currentAddress: deepDecrypt(curAddrCipher),
   };
@@ -95,6 +93,7 @@ function buildDecryptedUser(userDoc) {
 
   // dọn rác các field Enc trước khi trả ra ngoài
   delete decryptedUser.phoneNumberEnc;
+  delete decryptedUser.phoneNumber; // ❌ Bỏ phần liên hệ
   delete decryptedUser.addressEnc;
   delete decryptedUser.currentAddressEnc;
   delete decryptedUser.phoneNumberHash;
