@@ -375,7 +375,7 @@ const schedulingController = {
     try {
       const schedulingId = req.params.id;
 
-      // Populate supporter, elderly, createdBy, and service
+      // Populate supporter, elderly, registrant, and service
       const scheduling = await SupporterScheduling.findById(schedulingId)
         .populate(
           "supporter",
@@ -462,6 +462,13 @@ const schedulingController = {
         ? tryDecryptAny(scheduling?.elderly?.currentAddress)
         : "";
 
+      const phoneNumberRegistrant = scheduling?.registrant?.phoneNumberEnc
+        ? tryDecryptAny(scheduling?.registrant?.phoneNumberEnc)
+        : "";
+      const emailRegistrant = scheduling?.registrant?.emailEnc
+        ? tryDecryptAny(scheduling?.registrant?.emailEnc)
+        : "";
+
       // Tạo response
       const responseScheduling = {
         ...scheduling,
@@ -470,9 +477,21 @@ const schedulingController = {
         emailSupporter: emailSupporter,
         phoneNumberElderly: phoneNumberElderly,
         emailElderly: emailElderly,
+        phoneNumberRegistrant: phoneNumberRegistrant,
+        emailRegistrant: emailRegistrant,
         elderly: scheduling.elderly ? {
           ...scheduling.elderly,
           currentAddress: currentAddressElderly
+        } : null,
+        registrant: scheduling.registrant ? {
+          ...scheduling.registrant,
+          phoneNumber: phoneNumberRegistrant,
+          email: emailRegistrant
+        } : null,
+        supporter: scheduling.supporter ? {
+          ...scheduling.supporter,
+          phoneNumber: phoneNumberSupporter,
+          email: emailSupporter
         } : null,
       };
 

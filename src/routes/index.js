@@ -19,6 +19,7 @@ const supporterServiceRoutes = require('./supporterServices.routes');
 const transcribetionRoutes = require('./transcription.routes');
 
 const consultationSummaryRoutes = require('./consultationSummary.routes');
+const consultationPriceRoutes = require('./consultationPrice.routes');
 
 const payOsRoutes = require('./payos');
 function route(app) {
@@ -48,6 +49,7 @@ function route(app) {
     app.use('/api/payos', payOsRoutes);
 
     app.use('/api/consultation-summaries', consultationSummaryRoutes);
+    app.use('/api/consultation-prices', consultationPriceRoutes);
 }
 
 module.exports = route;
