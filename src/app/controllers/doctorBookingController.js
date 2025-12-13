@@ -27,7 +27,6 @@ function parseLocalDateString(value) {
     ) {
       return null;
     }
-    // Lưu lúc 12:00 trưa theo giờ local để tránh bị lùi ngày khi hiển thị UTC
     return new Date(year, monthIndex, day, 12, 0, 0, 0);
   };
 
@@ -57,7 +56,6 @@ function parseLocalDateString(value) {
   );
 }
 
-// Hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại 1-1
 async function endDoctorRelationshipAndConversation(registration, session) {
   if (!registration || !registration.doctor) return;
 
@@ -73,7 +71,6 @@ async function endDoctorRelationshipAndConversation(registration, session) {
   for (const pid of ids) {
     const patientId = pid;
 
-    // Cập nhật Relationship (elderly = bệnh nhân/registrant, family = doctor, relationship = "Bác sĩ")
     await Relationship.updateMany(
       {
         elderly: patientId,
@@ -87,7 +84,6 @@ async function endDoctorRelationshipAndConversation(registration, session) {
       { session },
     );
 
-    // Tắt hội thoại 1-1 giữa bác sĩ và bệnh nhân
     await Conversation.updateMany(
       {
         isActive: true,
@@ -1371,19 +1367,6 @@ const DoctorBookingController = {
       const reason = body.reason || "Người dùng yêu cầu hủy";
       const desiredStatus = body.status || "cancelled";
 
-      console.log(
-        LOG_TAG,
-        "==== START ====",
-        "\nregistrationId =",
-        registrationId,
-        "\nuserId        =",
-        userId,
-        "\nbody          =",
-        body,
-        "\ndesiredStatus =",
-        desiredStatus,
-      );
-
       if (!registrationId) {
         console.log(LOG_TAG, "❌ Thiếu registrationId");
         return res.status(400).json({
@@ -1463,7 +1446,7 @@ const DoctorBookingController = {
       await session.startTransaction();
       console.log(LOG_TAG, "🚀 Bắt đầu transaction");
 
-      // Với RegistrationConsulation: chỉ có confirmed/completed/cancelled.
+      
       let finalRegistrationStatus = registration.status;
 
       if (desiredStatus === "cancelled") {
@@ -1482,14 +1465,7 @@ const DoctorBookingController = {
         }).session(session);
 
         if (payment) {
-          console.log(
-            LOG_TAG,
-            "FOUND payment:",
-            "\n  _id    =",
-            payment._id.toString(),
-            "\n  status =",
-            payment.status,
-          );
+       
 
           if (
             payment.status !== "refunded" &&
@@ -1507,7 +1483,7 @@ const DoctorBookingController = {
           );
         }
 
-        // Khi hủy đăng ký tư vấn: hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại
+       
         await endDoctorRelationshipAndConversation(registration, session);
       } else if (["in_progress", "completed"].includes(desiredStatus)) {
         finalRegistrationStatus =
