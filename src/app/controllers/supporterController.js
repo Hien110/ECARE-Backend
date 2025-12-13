@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const User = require("../models/User.js");
 const SupporterProfile = require("../models/SupporterProfile.js");
 const SupporterScheduling = require('../models/SupporterScheduling');
+const Rating = require("../models/Rating.js");
 const buildConflictQuery = require('../../utils/buildConflictQuery');
 
 // Không dùng mongoose.Types.ObjectId — kiểm tra bằng regex 24 hex
@@ -77,13 +78,11 @@ function buildDecryptedUser(userDoc) {
   if (!userDoc) return null;
   const u = typeof userDoc.toObject === 'function' ? userDoc.toObject() : { ...userDoc };
 
-  const phoneCipher   = pick(u, ['phoneNumberEnc', 'phoneNumber']);
   const addrCipher    = pick(u, ['addressEnc', 'address']);
   const curAddrCipher = pick(u, ['currentAddressEnc', 'currentAddress']);
 
   const decryptedUser = {
     ...u,
-    phoneNumber:    deepDecrypt(phoneCipher),
     address:        deepDecrypt(addrCipher),
     currentAddress: deepDecrypt(curAddrCipher),
   };
@@ -94,6 +93,7 @@ function buildDecryptedUser(userDoc) {
 
   // dọn rác các field Enc trước khi trả ra ngoài
   delete decryptedUser.phoneNumberEnc;
+  delete decryptedUser.phoneNumber; // ❌ Bỏ phần liên hệ
   delete decryptedUser.addressEnc;
   delete decryptedUser.currentAddressEnc;
   delete decryptedUser.phoneNumberHash;
@@ -407,8 +407,8 @@ const SupporterProfileController = {
       const { bookingDraft } = req.body;
       console.log(bookingDraft);
 
-      if (!bookingDraft?.packageType) {
-        return res.status(400).json({ success: false, message: 'Thiếu bookingDraft' });
+      if (!bookingDraft?.startDate || !bookingDraft?.endDate) {
+        return res.status(400).json({ success: false, message: 'Thiếu startDate hoặc endDate trong bookingDraft' });
       }
 
       // 1) Lấy toàn bộ userId của supporter có hồ sơ
@@ -447,6 +447,197 @@ const SupporterProfileController = {
     } catch (e) {
       console.error('availability error', e);
       res.status(500).json({ success: false, message: 'Server error' });
+    }
+  },
+
+  // Danh sách đánh giá hồ sơ supporter (supporter_profile)
+  listSupporterReviews: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { cursor, limit = 20 } = req.query;
+
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "userId không hợp lệ" });
+      }
+
+      const supporterUser = await User.findById(userId).select("_id role");
+      if (!supporterUser || supporterUser.role !== "supporter") {
+        return res.status(404).json({ success: false, message: "Không tìm thấy nhân viên hỗ trợ" });
+      }
+
+      const find = Rating.find({
+        reviewee: userId,
+        ratingType: "supporter_profile",
+        status: "active",
+      })
+        .populate({ path: "reviewer", select: "fullName avatar" })
+        .sort({ _id: -1 })
+        .limit(Math.min(Number(limit), 50));
+
+      if (cursor) {
+        find.where({ _id: { $lt: new mongoose.Types.ObjectId(cursor) } });
+      }
+
+      const items = await find.lean();
+      const nextCursor = items.length ? items[items.length - 1]._id : null;
+
+      const mapped = items.map((r) => ({
+        id: r._id,
+        author: r.reviewer?.fullName || "Người dùng ẩn danh",
+        authorAvatar: r.reviewer?.avatar || null,
+        rating: r.rating,
+        content: r.comment || "",
+        date: new Date(r.createdAt).toLocaleDateString("vi-VN"),
+      }));
+
+      return res.status(200).json({ success: true, data: { items: mapped, nextCursor } });
+    } catch (err) {
+      console.error("listSupporterReviews error:", err);
+      return res.status(500).json({ success: false, message: "Không thể lấy danh sách đánh giá" });
+    }
+  },
+
+  // Tạo đánh giá hồ sơ supporter (supporter_profile)
+  createSupporterReview: async (req, res) => {
+    try {
+      const { userId } = req.params; // supporter được đánh giá
+      const { rating, comment } = req.body;
+      const reviewerId = req.user?.userId || req.body.reviewerId;
+
+      if (!reviewerId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "userId không hợp lệ" });
+      }
+
+      if (!rating || rating < 1 || rating > 5) {
+        return res
+          .status(400)
+          .json({ success: false, message: "rating phải trong khoảng 1..5" });
+      }
+
+      const profile = await SupporterProfile.findOne({ user: userId }).select("_id ratingStats").lean();
+      if (!profile) {
+        return res.status(404).json({ success: false, message: "Supporter chưa tạo hồ sơ" });
+      }
+
+      // chỉ cho phép đánh giá nếu đã từng có lịch hỗ trợ completed với supporter
+      const hasCompleted = await SupporterScheduling.exists({
+        supporter: userId,
+        registrant: reviewerId,
+        status: "completed",
+      });
+
+      if (!hasCompleted) {
+        return res.status(400).json({
+          success: false,
+          message: "Chỉ tài khoản đã từng sử dụng dịch vụ và hoàn thành với supporter mới được đánh giá",
+        });
+      }
+
+      // mỗi người chỉ được đánh giá 1 lần cho mỗi supporter
+      const existed = await Rating.findOne({
+        reviewer: reviewerId,
+        reviewee: userId,
+        ratingType: "supporter_profile",
+        status: { $ne: "deleted" },
+      });
+
+      if (existed) {
+        return res.status(400).json({
+          success: false,
+          message: "Bạn đã đánh giá nhân viên hỗ trợ này rồi",
+        });
+      }
+
+      const doc = await Rating.create({
+        reviewer: reviewerId,
+        reviewee: userId,
+        ratingType: "supporter_profile",
+        rating,
+        comment: comment?.trim() || "",
+        status: "active",
+      });
+
+      const stats = profile.ratingStats || { averageRating: 0, totalRatings: 0 };
+      const newTotal = (stats.totalRatings || 0) + 1;
+      const newAvg =
+        ((stats.averageRating || 0) * (stats.totalRatings || 0) + rating) /
+        newTotal;
+
+      await SupporterProfile.updateOne(
+        { _id: profile._id },
+        {
+          $set: {
+            "ratingStats.averageRating": Number(newAvg.toFixed(2)),
+            "ratingStats.totalRatings": newTotal,
+            "ratingStats.lastRatingAt": new Date(),
+          },
+        }
+      );
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          id: doc._id,
+          rating: doc.rating,
+          content: doc.comment,
+          date: new Date(doc.createdAt).toLocaleDateString("vi-VN"),
+        },
+      });
+    } catch (err) {
+      console.error("createSupporterReview error:", err);
+      return res.status(500).json({ success: false, message: "Không thể tạo đánh giá" });
+    }
+  },
+
+  // Thống kê đánh giá hồ sơ supporter
+  getSupporterRatingSummary: async (req, res) => {
+    try {
+      const { userId } = req.params;
+
+      if (!isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: "userId không hợp lệ" });
+      }
+
+      const profile = await SupporterProfile.findOne({ user: userId }).select("_id ratingStats").lean();
+      if (!profile) {
+        return res.status(404).json({ success: false, message: "Supporter chưa tạo hồ sơ" });
+      }
+
+      const rows = await Rating.aggregate([
+        {
+          $match: {
+            reviewee: new mongoose.Types.ObjectId(userId),
+            ratingType: "supporter_profile",
+            status: "active",
+          },
+        },
+        { $group: { _id: "$rating", count: { $sum: 1 } } },
+      ]);
+
+      const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      rows.forEach((r) => {
+        breakdown[r._id] = r.count;
+      });
+
+      const { averageRating = 0, totalRatings = 0, lastRatingAt } =
+        profile.ratingStats || {};
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          avg: averageRating,
+          total: totalRatings,
+          breakdown,
+          lastRatingAt,
+        },
+      });
+    } catch (err) {
+      console.error("getSupporterRatingSummary error:", err);
+      return res.status(500).json({ success: false, message: "Không thể lấy thống kê đánh giá" });
     }
   },
 };

@@ -8,10 +8,225 @@ const Payment = require("../models/Payment");
 const RegistrationConsulation = require("../models/RegistrationConsulation");
 const ConsultationPrice = require("../models/ConsultationPrice");
 const Conversation = require("../models/Conversation");
+const ConsultationSummary = require("../models/ConsultationSummary");
+const socketConfig = require("../../config/socket/socketConfig");
+const { tryDecryptField } = require("./userController");
 
 function getUserIdFromReq(req) {
   if (!req || !req.user) return null;
   return req.user._id || req.user.id || req.user.userId || null;
+}
+
+function parseLocalDateString(value) {
+  if (!value) return null;
+  const buildMidday = (year, monthIndex, day) => {
+    if (
+      Number.isNaN(year) ||
+      Number.isNaN(monthIndex) ||
+      Number.isNaN(day)
+    ) {
+      return null;
+    }
+    // Lưu lúc 12:00 trưa theo giờ local để tránh bị lùi ngày khi hiển thị UTC
+    return new Date(year, monthIndex, day, 12, 0, 0, 0);
+  };
+
+  if (value instanceof Date) {
+    return buildMidday(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+    );
+  }
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [yStr, mStr, dStr] = value.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr) - 1;
+    const d = Number(dStr);
+    return buildMidday(y, m, d);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return buildMidday(
+    parsed.getFullYear(),
+    parsed.getMonth(),
+    parsed.getDate(),
+  );
+}
+
+// Hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại 1-1
+async function endDoctorRelationshipAndConversation(registration, session) {
+  if (!registration || !registration.doctor) return;
+
+  const doctorId = registration.doctor;
+
+  const patientIds = new Set();
+  if (registration.beneficiary) patientIds.add(String(registration.beneficiary));
+  if (registration.registrant) patientIds.add(String(registration.registrant));
+
+  const ids = Array.from(patientIds).filter(Boolean);
+  if (!ids.length) return;
+
+  for (const pid of ids) {
+    const patientId = pid;
+
+    // Cập nhật Relationship (elderly = bệnh nhân/registrant, family = doctor, relationship = "Bác sĩ")
+    await Relationship.updateMany(
+      {
+        elderly: patientId,
+        family: doctorId,
+        relationship: "Bác sĩ",
+        status: { $ne: "cancelled" },
+      },
+      {
+        $set: { status: "cancelled" },
+      },
+      { session },
+    );
+
+    // Tắt hội thoại 1-1 giữa bác sĩ và bệnh nhân
+    await Conversation.updateMany(
+      {
+        isActive: true,
+        $and: [
+          { participants: { $elemMatch: { user: patientId } } },
+          { participants: { $elemMatch: { user: doctorId } } },
+        ],
+        "participants.2": { $exists: false },
+      },
+      {
+        $set: { isActive: false },
+      },
+      { session },
+    );
+  }
+}
+
+function emitBookingUpdated(registration, eventName = "consultation_booking_updated") {
+  if (!registration || !socketConfig || typeof socketConfig.emitToUser !== "function") return;
+
+  const ids = new Set();
+
+  const addId = (field) => {
+    if (!field) return;
+    if (typeof field === "string") {
+      ids.add(field);
+    } else if (field._id) {
+      ids.add(String(field._id));
+    } else {
+      ids.add(String(field));
+    }
+  };
+
+  addId(registration.doctor);
+  addId(registration.beneficiary);
+  addId(registration.registrant);
+
+  if (!ids.size) return;
+
+  const payload = {
+    registrationId: registration._id,
+    status: registration.status,
+    paymentStatus: registration.paymentStatus,
+    cancelReason: registration.cancelReason,
+  };
+
+  ids.forEach((userId) => {
+    try {
+      socketConfig.emitToUser(userId, eventName, payload);
+    } catch (err) {
+      // Không để lỗi socket làm hỏng luồng HTTP
+      // eslint-disable-next-line no-console
+      console.error("[DoctorBookingController][emitBookingUpdated] Socket emit error:", err.message);
+    }
+  });
+}
+
+async function autoCancelOverdueWithoutSummary(registrations) {
+  if (!Array.isArray(registrations) || !registrations.length) return registrations;
+
+  const now = new Date();
+
+  const overdueIds = [];
+
+  registrations.forEach((reg) => {
+    if (!reg || reg.status !== "confirmed" || !reg.scheduledDate || !reg.slot) {
+      return;
+    }
+
+    const base = new Date(reg.scheduledDate);
+    if (Number.isNaN(base.getTime())) return;
+
+    const end = new Date(base);
+    
+    if (reg.slot === "morning") {
+      end.setHours(11, 0, 0, 0);
+    } else if (reg.slot === "afternoon") {
+      end.setHours(16, 0, 0, 0);
+    } else {
+      return;
+    }
+console.log("end day 2", end);
+    if (now.getTime() > end.getTime()) {
+      overdueIds.push(String(reg._id));
+    }
+  });
+
+  if (!overdueIds.length) return registrations;
+
+  const summaries = await ConsultationSummary.find({
+    registration: { $in: overdueIds },
+  })
+    .select("registration _id")
+    .lean();
+
+  const hasSummary = new Set(summaries.map((s) => String(s.registration)));
+
+  const finalIds = overdueIds.filter((id) => !hasSummary.has(id));
+  if (!finalIds.length) return registrations;
+
+  const CANCEL_REASON = "Bác sĩ đi trễ lịch hẹn";
+
+  await RegistrationConsulation.updateMany(
+    { _id: { $in: finalIds }, status: "confirmed" },
+    {
+      $set: {
+        status: "cancelled",
+        paymentStatus: "refunded",
+        cancelReason: CANCEL_REASON,
+      },
+    },
+  );
+
+  await Payment.updateMany(
+    {
+      serviceType: "consultation",
+      serviceId: { $in: finalIds },
+      status: { $ne: "refunded" },
+    },
+    {
+      $set: { status: "refunded" },
+    },
+  );
+
+  const idSet = new Set(finalIds);
+  const updatedRegs = registrations.map((reg) => {
+    if (!reg || !idSet.has(String(reg._id))) return reg;
+    const updated = {
+      ...reg,
+      status: "cancelled",
+      paymentStatus: "refunded",
+      cancelReason: CANCEL_REASON,
+    };
+
+    emitBookingUpdated(updated);
+    return updated;
+  });
+
+  return updatedRegs;
 }
 
 const DoctorBookingController = {
@@ -103,10 +318,14 @@ const DoctorBookingController = {
       }
 
       const today = new Date();
-      const startDay = fromDate ? new Date(fromDate) : today;
-      const endDay = toDate ? new Date(toDate) : new Date(startDay);
+      const startDay = fromDate
+        ? parseLocalDateString(fromDate)
+        : parseLocalDateString(today);
+      const endDay = toDate
+        ? parseLocalDateString(toDate)
+        : parseLocalDateString(startDay);
 
-      if (Number.isNaN(startDay.getTime()) || Number.isNaN(endDay.getTime())) {
+      if (!startDay || !endDay) {
         return res.status(400).json({
           success: false,
           message: "fromDate/toDate không hợp lệ",
@@ -123,7 +342,6 @@ const DoctorBookingController = {
         });
       }
 
-      // Lấy tất cả registration của bác sĩ trong khoảng ngày, trừ completed/cancelled
       const registrations = await RegistrationConsulation.find({
         doctor: doctorId,
         status: { $nin: ["completed", "cancelled"] },
@@ -132,12 +350,15 @@ const DoctorBookingController = {
         .select("scheduledDate slot status")
         .lean();
 
-      // Gom theo ngày, đánh dấu slot đã bận (morning/afternoon)
-      const busyByDay = new Map(); // key: yyyy-MM-dd -> { morning: true/false, afternoon: true/false }
+      const busyByDay = new Map(); 
       registrations.forEach((r) => {
         if (!r.scheduledDate) return;
         const d = new Date(r.scheduledDate);
-        const key = d.toISOString().slice(0, 10);
+        if (Number.isNaN(d.getTime())) return;
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const key = `${y}-${m}-${day}`;
         if (!busyByDay.has(key)) {
           busyByDay.set(key, { morning: false, afternoon: false });
         }
@@ -149,28 +370,27 @@ const DoctorBookingController = {
       const result = [];
       const dayCursor = new Date(startDay);
 
-      // Lấy thời gian hiện tại theo giờ hệ thống server.
-      // Giả định server đang dùng giờ VN hoặc đã được cấu hình đúng.
+     
       const now = new Date();
 
-      // Đặt lịch phải trước giờ bắt đầu mỗi slot ít nhất 30 phút
-      const LIMIT_MINUTES = 30;
+      const LIMIT_MINUTES = 60;
       const LIMIT_MS = LIMIT_MINUTES * 60 * 1000;
 
       while (dayCursor <= endDay) {
-        const dayKey = dayCursor.toISOString().slice(0, 10);
+        const y = dayCursor.getFullYear();
+        const m = String(dayCursor.getMonth() + 1).padStart(2, "0");
+        const d = String(dayCursor.getDate()).padStart(2, "0");
+        const dayKey = `${y}-${m}-${d}`;
         const busy = busyByDay.get(dayKey) || { morning: false, afternoon: false };
 
         const freeSlots = [];
 
-        // morning: 8h - 10h
         if (!busy.morning) {
           const start = new Date(dayCursor);
           start.setHours(8, 0, 0, 0);
           const end = new Date(dayCursor);
-          end.setHours(10, 0, 0, 0);
+          end.setHours(11, 0, 0, 0);
 
-          // Chỉ cho đặt nếu còn ít nhất 30 phút trước 8h
           if (start.getTime() - now.getTime() >= LIMIT_MS) {
             freeSlots.push({
               slot: "morning",
@@ -222,7 +442,7 @@ const DoctorBookingController = {
   logDefaultConsultationPrice: async () => {
     try {
       const doc = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -248,7 +468,7 @@ const DoctorBookingController = {
   getDefaultConsultationPrice: async (req, res) => {
     try {
       const doc = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -315,13 +535,12 @@ const DoctorBookingController = {
           .json({ success: false, message: "Thiếu scheduledDate" });
       }
 
-      const dateObj = new Date(scheduledDate);
-      if (Number.isNaN(dateObj.getTime())) {
+      const dateObj = parseLocalDateString(scheduledDate);
+      if (!dateObj) {
         return res
           .status(400)
           .json({ success: false, message: "scheduledDate không hợp lệ" });
       }
-      dateObj.setHours(0, 0, 0, 0);
 
       const registrantUserId =
         registrantId && mongoose.Types.ObjectId.isValid(registrantId)
@@ -343,7 +562,7 @@ const DoctorBookingController = {
       }
 
       const priceConfig = await ConsultationPrice.findOne({
-        serviceKey: "doctor_consultation",
+        serviceName: "doctor_consultation",
         isActive: true,
       }).lean();
 
@@ -352,24 +571,29 @@ const DoctorBookingController = {
           ? priceConfig.price
           : RegistrationConsulation.schema.path("price").defaultValue || 0;
 
+      const normalizedPaymentMethod =
+        paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
+
+      const initialPaymentStatus =
+        normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
+
       const registration = new RegistrationConsulation({
         doctor: doctorId,
         registrant: registrantUserId,
         beneficiary: elderlyId,
         scheduledDate: dateObj,
         slot,
-        doctorNote: note || "",
-        paymentMethod: paymentMethod || "cash",
+        note: note || "",
+        paymentMethod: normalizedPaymentMethod,
+        paymentStatus: initialPaymentStatus,
         price: resolvedPrice,
       });
 
       await registration.save();
 
-      // ================== AUTO KẾT NỐI RELATIONSHIP + CONVERSATION VỚI BÁC SĨ ==================
       try {
         const doctorUserId = doctorId;
 
-        // Hàm nhỏ: đảm bảo có Conversation 1-1 giữa 2 user
         const ensureOneToOneConversation = async (userA, userB) => {
           if (!userA || !userB) return null;
           if (String(userA) === String(userB)) return null;
@@ -394,7 +618,6 @@ const DoctorBookingController = {
           return conv;
         };
 
-        // Hàm nhỏ: tạo Relationship accepted giữa patient và doctor nếu chưa có
         const ensureDoctorPatientRelationship = async (patientId) => {
           if (!patientId || !doctorUserId) return null;
           if (String(patientId) === String(doctorUserId)) return null;
@@ -435,21 +658,75 @@ const DoctorBookingController = {
           return rel;
         };
 
-        // 1) Tạo/đảm bảo quan hệ & conversation giữa beneficiary (người được khám) và bác sĩ
         await ensureDoctorPatientRelationship(elderlyId);
 
-        // 2) Nếu registrant khác beneficiary thì cũng tạo quan hệ & conversation giữa registrant và bác sĩ
         if (String(registrantUserId) !== String(elderlyId)) {
           await ensureDoctorPatientRelationship(registrantUserId);
         }
       } catch (autoErr) {
-        // Không để lỗi auto-connect làm fail việc tạo lịch
       }
-      // ================== HẾT PHẦN AUTO KẾT NỐI ==================
+
+      try {
+        const eventName = "consultation_booking_created";
+        const payload = {
+          registrationId: registration._id,
+          status: registration.status,
+          paymentStatus: registration.paymentStatus,
+        };
+
+        const notifyIds = new Set([
+          String(doctorId),
+          String(elderlyId),
+          String(registrantUserId),
+        ]);
+
+        notifyIds.forEach((uid) => {
+          if (!uid) return;
+          try {
+            socketConfig.emitToUser(uid, eventName, payload);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error("[DoctorBookingController][createRegistration] Socket emit error:", err.message);
+          }
+        });
+      } catch (socketErr) {
+        console.error("[DoctorBookingController][createRegistration] Socket outer error:", socketErr.message);
+      }
+
+      let populated = await RegistrationConsulation.findById(registration._id)
+        .populate({ path: 'doctor', select: 'fullName avatar gender currentAddress role isActive' })
+        .populate({ path: 'registrant', select: 'fullName avatar gender currentAddress role isActive' })
+        .populate({ path: 'beneficiary', select: 'fullName avatar gender dateOfBirth role currentAddress' })
+        .lean();
+
+      function isProbablyEncrypted(val) {
+        if (!val || typeof val !== 'string') return false;
+        return (val.includes('.') && val.split('.').length === 3) || (val.includes(':') && val.split(':').length === 3);
+      }
+
+      const crypto = require('crypto');
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || '', 'base64');
+      function encryptGCM(plain) {
+        if (!plain) return '';
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', ENC_KEY, iv);
+        const enc = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return [iv.toString('base64url'), tag.toString('base64url'), enc.toString('base64url')].join('.');
+      }
+
+      ['beneficiary', 'registrant', 'doctor'].forEach((role) => {
+        if (populated && populated[role] && populated[role].currentAddress != null) {
+          const addr = populated[role].currentAddress;
+          if (!isProbablyEncrypted(addr)) {
+            populated[role].currentAddress = encryptGCM(addr);
+          }
+        }
+      });
 
       return res.status(201).json({
         success: true,
-        data: registration,
+        data: populated || registration,
       });
     } catch (err) {
       return res.status(500).json({
@@ -475,34 +752,50 @@ const DoctorBookingController = {
       if (!doctorUsers.length) {
         return res.json({ success: true, data: [] });
       }
+      const doctorIds = doctorUsers.map((u) => u._id);
 
-      let result = doctorUsers.map((u) => ({
-        doctorId: u._id,
-        fullName: u.fullName,
-      }));
+      // Lấy thêm thông tin hồ sơ & thống kê đánh giá để hiển thị ở màn chọn bác sĩ
+      const profiles = await DoctorProfile.find({
+        user: { $in: doctorIds },
+      })
+        .select("user specialization experience ratingStats")
+        .lean();
+
+      const profileMap = new Map();
+      profiles.forEach((p) => {
+        if (!p || !p.user) return;
+        profileMap.set(String(p.user), p);
+      });
+
+      let result = doctorUsers.map((u) => {
+        const profile = profileMap.get(String(u._id));
+        const ratingStats = (profile && profile.ratingStats) || {};
+
+        return {
+          doctorId: u._id,
+          fullName: u.fullName,
+          specialization: profile ? profile.specialization || null : null,
+          experience: profile ? profile.experience || null : null,
+          ratingStats: {
+            averageRating:
+              typeof ratingStats.averageRating === "number"
+                ? ratingStats.averageRating
+                : 0,
+            totalRatings:
+              typeof ratingStats.totalRatings === "number"
+                ? ratingStats.totalRatings
+                : 0,
+          },
+        };
+      });
 
       if (specialization) {
         const keyword = String(specialization).toLowerCase();
 
-        const doctorIds = doctorUsers.map((u) => u._id);
-        const profiles = await DoctorProfile.find({
-          user: { $in: doctorIds },
-        })
-          .select("user specializations")
-          .lean();
-
-        const allowIds = new Set();
-        profiles.forEach((p) => {
-          const specs = Array.isArray(p.specializations)
-            ? p.specializations
-            : [];
-          const matched = specs.some((s) =>
-            String(s).toLowerCase().includes(keyword),
-          );
-          if (matched) allowIds.add(String(p.user));
+        result = result.filter((d) => {
+          const spec = d.specialization || "";
+          return String(spec).toLowerCase().includes(keyword);
         });
-
-        result = result.filter((d) => allowIds.has(String(d.doctorId)));
       }
 
       return res.json({
@@ -570,7 +863,7 @@ const DoctorBookingController = {
 
    
       if (role === "doctor") {
-        const doctorRegs = await RegistrationConsulation.find({
+        let doctorRegs = await RegistrationConsulation.find({
           doctor: userId,
         })
           .populate({
@@ -579,7 +872,7 @@ const DoctorBookingController = {
           })
           .populate({
             path: "beneficiary",
-            select: "fullName avatar gender dateOfBirth role",
+            select: "fullName avatar gender dateOfBirth role currentAddress",
           })
           .populate({
             path: "registrant",
@@ -588,7 +881,8 @@ const DoctorBookingController = {
           .sort({ registeredAt: -1, createdAt: -1 })
           .lean();
 
-        // Không còn Consultation riêng, dùng trực tiếp registration + Payment (nếu có)
+        doctorRegs = await autoCancelOverdueWithoutSummary(doctorRegs);
+
         const regIds = doctorRegs.map((r) => String(r._id));
 
         const payments = await Payment.find({
@@ -604,11 +898,37 @@ const DoctorBookingController = {
         });
 
         const mergedDoctor = doctorRegs.map((reg) => {
+          const beneficiary = reg.beneficiary || null;
+          const registrant = reg.registrant || null;
+
+          const beneficiaryWithAddress = beneficiary
+            ? {
+                ...beneficiary,
+                currentAddress:
+                  beneficiary.currentAddress != null
+                    ? tryDecryptField(beneficiary.currentAddress)
+                    : beneficiary.currentAddress,
+              }
+            : null;
+
+          const registrantWithAddress =
+            registrant && typeof registrant === "object"
+              ? {
+                  ...registrant,
+                  currentAddress:
+                    registrant.currentAddress != null
+                      ? tryDecryptField(registrant.currentAddress)
+                      : registrant.currentAddress,
+                }
+              : registrant;
+
           const regId = String(reg._id);
           const pay = payByReg.get(regId) || null;
 
           return {
             ...reg,
+            beneficiary: beneficiaryWithAddress,
+            registrant: registrantWithAddress,
             payment: pay
               ? {
                   method: pay.paymentMethod,
@@ -655,6 +975,8 @@ const DoctorBookingController = {
         })
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
+
+      registrations = await autoCancelOverdueWithoutSummary(registrations);
 
       const registrantIds = [];
       registrations.forEach(reg => {
@@ -814,10 +1136,17 @@ const DoctorBookingController = {
   },
 
   getBookingsByElderlyId: async (req, res) => {
+    const TAG_LOG = '[getBookingsByElderlyId]';
     try {
       const requesterId = getUserIdFromReq(req);
       const role = (req.user?.role || "").toLowerCase();
       const { elderlyId } = req.params || {};
+
+      console.log(TAG_LOG, 'START', {
+        requesterId,
+        role,
+        elderlyId,
+      });
 
       if (!requesterId) {
         return res
@@ -826,6 +1155,7 @@ const DoctorBookingController = {
       }
 
       if (!elderlyId || !mongoose.Types.ObjectId.isValid(elderlyId)) {
+        console.log(TAG_LOG, 'elderlyId không hợp lệ:', elderlyId);
         return res.status(400).json({
           success: false,
           message: "elderlyId không hợp lệ",
@@ -855,6 +1185,7 @@ const DoctorBookingController = {
       }
 
       if (!canView) {
+        console.log(TAG_LOG, '❌ Không có quyền xem, role =', role, 'requesterId =', requesterId, 'elderlyId =', elderlyId);
         return res.status(403).json({
           success: false,
           message:
@@ -864,8 +1195,9 @@ const DoctorBookingController = {
 
       const query = {
         beneficiary: elderlyId,
-        isActive: true,
       };
+
+      console.log(TAG_LOG, 'Query:', query);
 
       let registrations = await RegistrationConsulation.find(query)
         .populate({
@@ -874,11 +1206,7 @@ const DoctorBookingController = {
         })
         .populate({
           path: "beneficiary",
-          select: "fullName avatar gender dateOfBirth role",
-        })
-        .populate({
-          path: "packageRef",
-          select: "title price durationOptions description",
+          select: "fullName avatar gender dateOfBirth role currentAddress",
         })
         .populate({
           path: "registrant",
@@ -887,7 +1215,10 @@ const DoctorBookingController = {
         .sort({ registeredAt: -1, createdAt: -1 })
         .lean();
 
-      // ==== đảm bảo registrant là object User ====
+      registrations = await autoCancelOverdueWithoutSummary(registrations);
+
+      console.log(TAG_LOG, 'Found registrations:', registrations.length);
+
       const registrantIdList = [];
       registrations.forEach((reg) => {
         const r = reg.registrant;
@@ -944,6 +1275,44 @@ const DoctorBookingController = {
         payByRegId.set(String(p.serviceId), p);
       });
 
+      // Decrypt helper functions
+      const crypto = require("crypto");
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || "", "base64");
+
+      const decryptLegacy = (enc) => {
+        if (!enc) return null;
+        const [ivB64, ctB64, tagB64] = String(enc).split(":");
+        const iv = Buffer.from(ivB64, "base64");
+        const ct = Buffer.from(ctB64, "base64");
+        const tag = Buffer.from(tagB64, "base64");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+      };
+
+      const decryptGCM = (packed) => {
+        if (!packed) return null;
+        const [ivB64, tagB64, dataB64] = String(packed).split(".");
+        const iv = Buffer.from(ivB64, "base64url");
+        const tag = Buffer.from(tagB64, "base64url");
+        const data = Buffer.from(dataB64, "base64url");
+        const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(data), d.final()]).toString("utf8");
+      };
+
+      const tryDecryptAny = (v) => {
+        if (v == null || v === "") return null;
+        const s = String(v);
+        try {
+          if (s.includes(".")) return decryptGCM(s);
+          if (s.includes(":")) return decryptLegacy(s);
+          return s;
+        } catch {
+          return null;
+        }
+      };
+
       const merged = registrations.map((reg) => {
         const regIdStr = String(reg._id);
         const pay = payByRegId.get(regIdStr) || null;
@@ -955,19 +1324,35 @@ const DoctorBookingController = {
             transactionId: pay.transactionId,
           };
 
+        // Decrypt currentAddress if exists
+        const beneficiaryDecrypted = reg.beneficiary ? {
+          ...reg.beneficiary,
+          currentAddress: tryDecryptAny(reg.beneficiary.currentAddress) || reg.beneficiary.currentAddress
+        } : null;
+
+        const registrantDecrypted = reg.registrant && typeof reg.registrant === 'object' ? {
+          ...reg.registrant,
+          currentAddress: tryDecryptAny(reg.registrant.currentAddress) || reg.registrant.currentAddress
+        } : reg.registrant;
+
         return {
           ...reg,
+          beneficiary: beneficiaryDecrypted,
+          registrant: registrantDecrypted,
           payment: paymentObj || undefined,
           paymentMethod: pay?.paymentMethod,
           paymentStatus: pay?.status,
         };
       });
 
+      console.log(TAG_LOG, 'Returning', merged.length, 'bookings');
+
       return res.json({
         success: true,
         data: merged,
       });
     } catch (err) {
+      console.error(TAG_LOG, 'ERROR:', err);
       return res.status(500).json({
         success: false,
         message: "Lỗi lấy lịch tư vấn theo người cao tuổi",
@@ -1029,21 +1414,8 @@ const DoctorBookingController = {
           message: "Không tìm thấy lịch tư vấn",
         });
       }
-
-      console.log(
-        LOG_TAG,
-        "✅ FOUND registration:",
-        "\n  _id          =",
-        registration._id.toString(),
-        "\n  status       =",
-        registration.status,
-        "\n  registrant   =",
-        registration.registrant,
-        "\n  beneficiary  =",
-        registration.beneficiary,
-        "\n  doctor       =",
-        registration.doctor,
-      );
+      
+      
 
       const userIdStr = String(userId);
       const registrantStr = String(registration.registrant || "");
@@ -1056,19 +1428,8 @@ const DoctorBookingController = {
       const isAdmin = role === "admin";
       const isDoctorOfBooking = role === "doctor" && userIdStr === doctorStr;
 
-      console.log(LOG_TAG, "Check quyền:", {
-        userIdStr,
-        registrantStr,
-        beneficiaryStr,
-        doctorStr,
-        role,
-        isOwner,
-        isAdmin,
-        isDoctorOfBooking,
-        desiredStatus,
-      });
+      
 
-      // Cho phép: cancelled (owner/admin), in_progress/completed (doctor của lịch hoặc admin)
       if (desiredStatus === "cancelled") {
         if (!isOwner && !isAdmin) {
           console.log(
@@ -1113,14 +1474,7 @@ const DoctorBookingController = {
         registration.cancelReason = reason;
         await registration.save({ session });
 
-        console.log(
-          LOG_TAG,
-          "✅ Sau khi save registration (cancelled):",
-          "\n  _id    =",
-          registration._id.toString(),
-          "\n  status =",
-          registration.status,
-        );
+       
 
         const payment = await Payment.findOne({
           serviceType: "consultation",
@@ -1145,21 +1499,6 @@ const DoctorBookingController = {
             payment.cancelledAt = new Date();
             await payment.save({ session });
 
-            console.log(
-              LOG_TAG,
-              "✅ Sau khi save payment (cancelled):",
-              "\n  _id    =",
-              payment._id.toString(),
-              "\n  status =",
-              payment.status,
-            );
-          } else {
-            console.log(
-              LOG_TAG,
-              "Payment đã ở trạng thái",
-              payment.status,
-              "=> không đổi nữa",
-            );
           }
         } else {
           console.log(
@@ -1167,6 +1506,9 @@ const DoctorBookingController = {
             "ℹ️ Không tìm thấy payment cho registration này",
           );
         }
+
+        // Khi hủy đăng ký tư vấn: hủy quan hệ Bác sĩ - bệnh nhân và tắt hội thoại
+        await endDoctorRelationshipAndConversation(registration, session);
       } else if (["in_progress", "completed"].includes(desiredStatus)) {
         finalRegistrationStatus =
           desiredStatus === "completed" ? "completed" : "confirmed";
@@ -1182,6 +1524,22 @@ const DoctorBookingController = {
           "\n  status =",
           registration.status,
         );
+
+        // Trường hợp chuyển sang completed: kiểm tra theo durationDays để tự hủy quan hệ & hội thoại
+        if (finalRegistrationStatus === "completed") {
+          const durationDays = RegistrationConsulation.schema.path("durationDays").defaultValue || 0;
+          if (durationDays > 0) {
+            const startDate = registration.registeredAt || registration.createdAt || new Date();
+            const endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + durationDays);
+            const now = new Date();
+            if (now.getTime() >= endDate.getTime()) {
+              await endDoctorRelationshipAndConversation(registration, session);
+            }
+          } else {
+            await endDoctorRelationshipAndConversation(registration, session);
+          }
+        }
       }
 
       await session.commitTransaction();
@@ -1195,6 +1553,8 @@ const DoctorBookingController = {
         .populate("beneficiary")
         .populate("registrant")
         .lean();
+
+      emitBookingUpdated(updatedRegistration);
 
       console.log(
         LOG_TAG,

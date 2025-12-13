@@ -1,7 +1,14 @@
+const mongoose = require('mongoose');
 const ConsultationSummary = require('../models/ConsultationSummary');
 const RegistrationConsulation = require('../models/RegistrationConsulation');
 const DoctorProfile = require('../models/DoctorProfile');
+const Relationship = require('../models/Relationship');
 const { tryDecryptField } = require('./userController');
+
+function getUserIdFromReq(req) {
+  if (!req || !req.user) return null;
+  return req.user._id || req.user.id || req.user.userId || null;
+}
 
 function mapUserForResponse(user) {
   if (!user) return null;
@@ -13,6 +20,10 @@ function mapUserForResponse(user) {
 
   if (mapped.phoneNumber != null) {
     mapped.phoneNumber = tryDecryptField(mapped.phoneNumber);
+  }
+
+  if (mapped.currentAddress != null) {
+    mapped.currentAddress = tryDecryptField(mapped.currentAddress);
   }
 
   return mapped;
@@ -52,7 +63,7 @@ const consultationSummaryController = {
       try {
         const updatedRegistration = await RegistrationConsulation.findOneAndUpdate(
           { _id: registrationId, status: { $ne: 'completed' } },
-          { $set: { status: 'completed' } },
+          { $set: { status: 'completed', paymentStatus: 'paid' } },
           { new: true },
         );
 
@@ -65,7 +76,6 @@ const consultationSummaryController = {
         }
       } catch (autoErr) {
         console.error('AUTO COMPLETE REGISTRATION / UPDATE DOCTOR PROFILE ERROR:', autoErr);
-        // Không throw để tránh làm fail API lưu phiếu khám
       }
 
       return res.status(200).json({
@@ -115,15 +125,18 @@ const consultationSummaryController = {
       const registration = await RegistrationConsulation.findById(registrationId)
         .populate({
           path: 'doctor',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .populate({
           path: 'beneficiary',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .populate({
           path: 'registrant',
-          select: 'fullName avatar gender dateOfBirth role phoneNumber isActive',
+          select:
+            'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
         })
         .lean();
 
@@ -170,6 +183,111 @@ const consultationSummaryController = {
       });
     } catch (error) {
       console.error('DELETE CONSULTATION SUMMARY ERROR:', error);
+      return res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
+    }
+  },
+
+  async getSummariesByElderly(req, res) {
+    try {
+      const requesterId = getUserIdFromReq(req);
+      const role = (req.user?.role || '').toLowerCase();
+      const { elderlyId } = req.params || {};
+
+      if (!requesterId) {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      if (!elderlyId || !mongoose.Types.ObjectId.isValid(elderlyId)) {
+        return res.status(400).json({ message: 'elderlyId không hợp lệ' });
+      }
+
+      let canView = false;
+
+      if (role === 'elderly' && String(requesterId) === String(elderlyId)) {
+        canView = true;
+      }
+
+      if (!canView && role === 'family') {
+        const rel = await Relationship.findOne({
+          elderly: elderlyId,
+          family: requesterId,
+          status: 'accepted',
+        })
+          .select('_id')
+          .lean();
+
+        if (rel) canView = true;
+      }
+
+      if (!canView && (role === 'doctor' || role === 'admin')) {
+        canView = true;
+      }
+
+      if (!canView) {
+        return res.status(403).json({
+          message: 'Bạn không có quyền xem lịch sử phiếu khám của người cao tuổi này.',
+        });
+      }
+
+      const registrations = await RegistrationConsulation.find({
+        beneficiary: elderlyId,
+      })
+        .select('_id doctor registrant beneficiary scheduledDate slot status')
+        .lean();
+
+      if (!registrations.length) {
+        return res.status(200).json({
+          message: 'Không có phiếu khám nào',
+          data: [],
+        });
+      }
+
+      const regIds = registrations.map((r) => r._id);
+
+      const summaries = await ConsultationSummary.find({
+        registration: { $in: regIds },
+      })
+        .populate({
+          path: 'registration',
+          populate: [
+            {
+              path: 'doctor',
+              select:
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
+            },
+            {
+              path: 'beneficiary',
+              select:
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
+            },
+            {
+              path: 'registrant',
+              select:
+                'fullName avatar gender dateOfBirth role phoneNumber isActive currentAddress',
+            },
+          ],
+        })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const data = summaries.map((s) => {
+        const reg = s.registration || null;
+        const beneficiaryUser =
+          (reg && (reg.beneficiary || reg.registrant)) || null;
+
+        return {
+          ...s,
+          doctor: mapUserForResponse(reg?.doctor || null),
+          beneficiary: mapUserForResponse(beneficiaryUser),
+        };
+      });
+
+      return res.status(200).json({
+        message: 'Lấy lịch sử phiếu khám thành công',
+        data,
+      });
+    } catch (error) {
+      console.error('GET SUMMARIES BY ELDERLY ERROR:', error);
       return res.status(500).json({ message: 'Lỗi máy chủ', error: error.message });
     }
   },

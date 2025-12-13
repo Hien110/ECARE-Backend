@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const DoctorProfile = require("../models/DoctorProfile.js");
 const User = require("../models/User.js");
 const Rating = require("../models/Rating.js");
+const RegistrationConsulation = require("../models/RegistrationConsulation");
 const {
   DAY_MIN,
   DAY_MAX,
@@ -538,11 +539,29 @@ updateScheduleForDay: async (req, res) => {
         totalRatings = 0,
         lastRatingAt = null,
       } = profile.ratingStats || {};
+
+      // Tính breakdown theo từng số sao để client hiển thị tỉ lệ 5★, dưới 4★...
+      const rows = await Rating.aggregate([
+        {
+          $match: {
+            reviewee: new mongoose.Types.ObjectId(doctorId),
+            ratingType: "doctor_profile",
+            status: "active",
+          },
+        },
+        { $group: { _id: "$rating", count: { $sum: 1 } } },
+      ]);
+
+      const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      rows.forEach((r) => {
+        breakdown[r._id] = r.count;
+      });
+
       return res
         .status(200)
         .json({
           success: true,
-          data: { averageRating, totalRatings, lastRatingAt },
+          data: { averageRating, totalRatings, lastRatingAt, breakdown },
         });
     } catch (err) {
       console.error("getMyRatingStats error:", err);
@@ -708,7 +727,38 @@ updateScheduleForDay: async (req, res) => {
       const profile = await DoctorProfile.findOne({ user: userId }).select("_id ratingStats").lean();
       if (!profile) return res.status(404).json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
 
-      // (tùy chọn) kiểm tra reviewer đã từng có appointment DONE với bác sĩ
+      // kiểm tra reviewer đã từng có consultation hoàn thành với bác sĩ hay chưa
+      // Cho phép cả tài khoản người đặt (registrant) lẫn người được khám (beneficiary)
+      const hasCompletedConsultation = await RegistrationConsulation.exists({
+        doctor: userId,
+        status: "completed",
+        $or: [
+          { registrant: reviewerId },
+          { beneficiary: reviewerId },
+        ],
+      });
+
+      if (!hasCompletedConsultation) {
+        return res.status(400).json({
+          success: false,
+          message: "Chỉ tài khoản đã từng khám và hoàn thành với bác sĩ mới được đánh giá",
+        });
+      }
+
+      // kiểm tra trùng lặp: mỗi người chỉ được đánh giá 1 lần cho mỗi bác sĩ
+      const existed = await Rating.findOne({
+        reviewer: reviewerId,
+        reviewee: userId,
+        ratingType: "doctor_profile",
+        status: { $ne: "deleted" },
+      });
+
+      if (existed) {
+        return res.status(400).json({
+          success: false,
+          message: "Bạn đã đánh giá bác sĩ này rồi",
+        });
+      }
 
       const doc = await Rating.create({
         reviewer: reviewerId,

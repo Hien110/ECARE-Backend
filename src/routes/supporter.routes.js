@@ -10,4 +10,9 @@ router.get("/me", SupporterController.getMyProfile);
 router.put("/me", SupporterController.updateMyProfile);
 router.post('/availability', SupporterController.getAvailableSupporters);
 
+// rating hồ sơ supporter
+router.get("/:userId/reviews", SupporterController.listSupporterReviews);
+router.post("/:userId/reviews", SupporterController.createSupporterReview);
+router.get("/:userId/ratings/summary", SupporterController.getSupporterRatingSummary);
+
 module.exports = router;
