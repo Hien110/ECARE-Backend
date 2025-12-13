@@ -690,13 +690,43 @@ const DoctorBookingController = {
           }
         });
       } catch (socketErr) {
-        // eslint-disable-next-line no-console
         console.error("[DoctorBookingController][createRegistration] Socket outer error:", socketErr.message);
       }
 
+      let populated = await RegistrationConsulation.findById(registration._id)
+        .populate({ path: 'doctor', select: 'fullName avatar gender currentAddress role isActive' })
+        .populate({ path: 'registrant', select: 'fullName avatar gender currentAddress role isActive' })
+        .populate({ path: 'beneficiary', select: 'fullName avatar gender dateOfBirth role currentAddress' })
+        .lean();
+
+      function isProbablyEncrypted(val) {
+        if (!val || typeof val !== 'string') return false;
+        return (val.includes('.') && val.split('.').length === 3) || (val.includes(':') && val.split(':').length === 3);
+      }
+
+      const crypto = require('crypto');
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || '', 'base64');
+      function encryptGCM(plain) {
+        if (!plain) return '';
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', ENC_KEY, iv);
+        const enc = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return [iv.toString('base64url'), tag.toString('base64url'), enc.toString('base64url')].join('.');
+      }
+
+      ['beneficiary', 'registrant', 'doctor'].forEach((role) => {
+        if (populated && populated[role] && populated[role].currentAddress != null) {
+          const addr = populated[role].currentAddress;
+          if (!isProbablyEncrypted(addr)) {
+            populated[role].currentAddress = encryptGCM(addr);
+          }
+        }
+      });
+
       return res.status(201).json({
         success: true,
-        data: registration,
+        data: populated || registration,
       });
     } catch (err) {
       return res.status(500).json({
