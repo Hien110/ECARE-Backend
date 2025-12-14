@@ -587,6 +587,29 @@ const DoctorBookingController = {
 
       await registration.save();
 
+      // Kiểm tra và xóa liên kết/conversation cũ nếu có lịch khám cuối cùng đã hoàn thành/hủy
+      try {
+        const lastCompletedOrCancelledReg = await RegistrationConsulation.findOne({
+          doctor: doctorId,
+          beneficiary: elderlyId,
+          _id: { $ne: registration._id },
+          status: { $in: ["completed", "cancelled"] },
+        })
+          .sort({ scheduledDate: -1 })
+          .lean();
+
+        if (lastCompletedOrCancelledReg) {
+          // Xóa relationship và conversation của lịch cũ
+          await endDoctorRelationshipAndConversation(lastCompletedOrCancelledReg, null);
+        }
+      } catch (cleanupErr) {
+        // Log nhưng không block luồng chính
+        console.warn(
+          "[DoctorBookingController][createRegistration] Lỗi khi dọn dẹp liên kết cũ:",
+          cleanupErr.message
+        );
+      }
+
       try {
         const doctorUserId = doctorId;
 
@@ -594,8 +617,8 @@ const DoctorBookingController = {
           if (!userA || !userB) return null;
           if (String(userA) === String(userB)) return null;
 
+          // Tìm conversation 1-1 đã tồn tại (active hoặc inactive)
           let conv = await Conversation.findOne({
-            isActive: true,
             $and: [
               { participants: { $elemMatch: { user: userA } } },
               { participants: { $elemMatch: { user: userB } } },
@@ -608,6 +631,10 @@ const DoctorBookingController = {
               participants: [{ user: userA }, { user: userB }],
               isActive: true,
             });
+            await conv.save();
+          } else if (!conv.isActive) {
+            // Nếu conversation tồn tại nhưng inactive, kích hoạt lại
+            conv.isActive = true;
             await conv.save();
           }
 
