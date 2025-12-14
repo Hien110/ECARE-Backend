@@ -1,10 +1,6 @@
 const moment = require('moment-timezone');
 const ElderlyProfile = require('../app/models/ElderlyProfile');
 
-function lg(reqId, ...args) {
-  console.log(`[Deadman][sweep][#${reqId}]`, ...args);
-}
-
 async function sweepOnce() {
   const reqId = Math.random().toString(36).slice(2, 8);
 
@@ -13,8 +9,6 @@ async function sweepOnce() {
   })
     .select('user safetyMonitoring')
     .lean();
-
-  lg(reqId, 'START. profiles=', list.length);
 
   const WINDOWS = ['07:00', '15:00', '19:00'];
 
@@ -34,20 +28,7 @@ async function sweepOnce() {
       ? moment(st.autoSosTriggeredAt).tz(tz)
       : null;
 
-    lg(reqId, 'USER=', String(prof.user));
-    lg(reqId, {
-      tz,
-      now: nowTZ.format(),
-      lastCheckinAt: lastCheckin?.format() || null,
-      snoozeUntil: snoozeUntil?.format() || null,
-      lastReminderAt: st.lastReminderAt,
-      lastAlertAt: st.lastAlertAt,
-      alertCountToday: alertCountTodayRaw,
-      autoSosTriggeredAt: autoSosTriggeredAt?.format() || null,
-    });
-
     if (snoozeUntil && snoozeUntil.isAfter(nowTZ)) {
-      lg(reqId, 'SKIP reason=snoozed_until', snoozeUntil.format());
       continue;
     }
 
@@ -66,10 +47,7 @@ async function sweepOnce() {
 
       const repeatGapMins = 1;
 
-      lg(reqId, '--- window ---', { window: hhmm, windowStart: windowStart.format() });
-
       if (lastCheckin && lastCheckin.isSameOrAfter(windowStart)) {
-        lg(reqId, 'SKIP window reason=checked_in_after_windowStart');
         continue;
       }
 
@@ -87,7 +65,6 @@ async function sweepOnce() {
         }
 
         if (needRemind) {
-          lg(reqId, 'ACTION reminder -> _remindElder (pre-5m ONCE per window)');
           try {
             await ElderlyProfile.updateOne(
               { user: prof.user },
@@ -100,15 +77,12 @@ async function sweepOnce() {
             const DeadmanController = require('../app/controllers/deadmanController');
             if (typeof DeadmanController._remindElder === 'function') {
               await DeadmanController._remindElder(prof.user);
-              lg(reqId, 'REMINDER sent OK for window', { window: hhmm });
             } else {
-              lg(reqId, 'WARN _remindElder not implemented');
             }
           } catch (e) {
             console.error('[Deadman] remind error', e);
           }
         } else {
-          lg(reqId, 'SKIP reason=reminder_already_sent_for_this_window');
         }
         continue;
       }
@@ -127,15 +101,6 @@ async function sweepOnce() {
           }
 
         if (!inSameWindow) {
-          console.log(
-            '[Deadman][count] reset alertCountToday vì sang khung giờ mới hoặc lastAlertAt invalid',
-            {
-              window: hhmm,
-              firstAlertAt: firstAlertAt.format(),
-              prevAlertCountToday: alertCountTodayRaw,
-              lastAlertAt: st.lastAlertAt,
-            },
-          );
           alertCountToday = 0;
         }
 
@@ -154,24 +119,12 @@ async function sweepOnce() {
             .clone()
             .add(repeatGapMinsInner, 'minutes')
             .format();
-
-          console.log('[Deadman][count] diffMins since lastAlertAt =', diffMins, {
-            window: hhmm,
-            lastAlertAt: lastAlertAtRaw.format(),
-            now: nowTZ.format(),
-          });
         }
 
         if (shouldSend) {
           alertCountToday += 1;
 
           const shouldTriggerAutoSOS = alertCountToday === 3; // ✅ Lần thứ 3 trong KHUNG GIỜ nào cũng auto SOS
-
-          lg(reqId, 'ACTION alert -> _alertRelatives (every 1 minute)', {
-            window: hhmm,
-            alertCountToday,
-            shouldTriggerAutoSOS,
-          });
 
           try {
             const setObj = {
@@ -191,40 +144,29 @@ async function sweepOnce() {
                 alertCountToday,
                 isAutoSOS: shouldTriggerAutoSOS,
               });
-              lg(reqId, 'ALERT sent OK (to relatives)', {
-                alertCountToday,
-                isAutoSOS: shouldTriggerAutoSOS,
-              });
             } else {
-              lg(reqId, 'WARN _alertRelatives not implemented');
             }
           } catch (e) {
             console.error('[Deadman] alert error', e);
           }
         } else {
-          lg(reqId, 'WAIT until next 1m alert tick', { nextAlertDue: nextAlertDueLog });
         }
 
         continue; 
       }
 
       if (nowTZ.isBefore(remindAt)) {
-        lg(reqId, 'WAITING (before remindAt)');
         continue;
       }
 
       if (nowTZ.isSameOrAfter(windowStart) && nowTZ.isBefore(firstAlertAt)) {
-        lg(reqId, 'COUNTING (between windowStart and firstAlertAt)');
         continue;
       }
     }
   }
-
-  lg(reqId, 'END');
 }
 
 function startDeadmanScheduler() {
-  console.log('[Deadman] Scheduler started (utils/deadmanScheduler.js)');
   sweepOnce().catch(e => console.error('[Deadman] Sweep error (initial)', e));
   setInterval(() => {
     sweepOnce().catch(e => console.error('[Deadman] Sweep error', e));
