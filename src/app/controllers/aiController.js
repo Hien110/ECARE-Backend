@@ -115,6 +115,21 @@ const AiController = {
           .slice(0, max);
       }
 
+      function stripLogLines(s) {
+        if (!s) return s;
+        const lines = String(s).split(/\r?\n/).map((l) => l.trim());
+        const keep = lines.filter((l) => {
+          if (!l) return false;
+          if (/^\[?\d{2,4}[:\-\/\s\]\[]/.test(l)) return false;
+          if (/\b(DEBUG|INFO|WARN|ERROR|TRACE)\b/i.test(l)) return false;
+          if (/console\.|\bstack\b|\btrace\b|npm ERR!|http:\/\//i.test(l)) return false;
+          // drop divider-like lines
+          if (/^[-=~]{2,}$/.test(l)) return false;
+          return true;
+        });
+        return keep.join(" ").trim();
+      }
+
       function sliceHistory(list = [], maxChars = 12000) {
         let acc = 0,
           out = [];
@@ -164,11 +179,35 @@ const AiController = {
           followUps: [],
         };
         const s = String(fullText || "");
-        const m = s.match(/<<<EMOTION_JSON>>>\s*```json\s*([\s\S]*?)```/i);
-        let emotion = fallback;
+
+        // Try several patterns to find embedded emotion JSON (robust to variations):
+        // 1) Explicit marker + fenced json: <<<EMOTION_JSON>>>```json {...}```
+        // 2) Any fenced ```json {...}``` block
+        // 3) A raw JSON object at the end of the text (e.g. {...})
+        let matched = null;
+        let jsonText = null;
+        let m = s.match(/<<<EMOTION_JSON>>>\s*```json\s*([\s\S]*?)```/i);
         if (m) {
+          jsonText = m[1];
+          matched = m[0];
+        } else {
+          m = s.match(/```json\s*([\s\S]*?)```/i);
+          if (m) {
+            jsonText = m[1];
+            matched = m[0];
+          } else {
+            m = s.match(/(?:```)?\s*(\{[\s\S]*\})\s*(?:```)?\s*$/m);
+            if (m) {
+              jsonText = m[1];
+              matched = m[0];
+            }
+          }
+        }
+
+        let emotion = fallback;
+        if (jsonText) {
           try {
-            const p = JSON.parse(m[1]);
+            const p = JSON.parse(jsonText);
             emotion = {
               ...fallback,
               ...p,
@@ -179,9 +218,24 @@ const AiController = {
                 ? p.dangerSignals.slice(0, 6).filter(Boolean)
                 : [],
             };
-          } catch {}
+          } catch (e) {
+            // ignore parse errors and treat as no emotion JSON
+            jsonText = null;
+            matched = null;
+          }
         }
-        const reply = m ? s.replace(m[0], "").trim() : s.trim();
+
+        // Strip out the matched JSON block (if any) and any remaining fenced code blocks
+        let reply = s;
+        if (matched) reply = reply.replace(matched, "");
+        // remove any remaining triple-backtick blocks
+        reply = reply.replace(/```[\s\S]*?```/g, "");
+        // remove a trailing raw JSON object if still present
+        reply = reply.replace(/\s*\{[\s\S]*\}\s*$/m, "");
+        // remove inline backticks
+        reply = reply.replace(/`+/g, "");
+        reply = reply.trim();
+
         return { reply, emotion };
       }
 
@@ -470,6 +524,8 @@ const AiController = {
       // === BODY ===
       let { message, history = [], sessionId = null } = req.body || {};
       message = sanitizeMessage(message);
+      // Strip any leftover console/log lines (common when using voice->text that includes noise)
+      message = stripLogLines(message);
       history = sliceHistory(history);
       if (!message)
         return res
@@ -647,6 +703,8 @@ const AiController = {
       const userPrompt =
         `${message}\n\n` +
         "Hãy trả lời thân mật, trấn an; không tự nhận là AI. " +
+        "Luôn trả lời ngắn gọn, KHÔNG quá 25 chữ cho mọi câu hỏi (kể cả khi nói ốm/mệt). " +
+        "Nếu cần thông tin thêm, viết 'muốn biết thêm'. " +
         "Luôn xưng 'cháu' hoặc 'tôi' và gọi người dùng là 'bác'. " +
         "Không dùng các đại từ 'em/anh/chị/bạn', không gọi '... ơi'. " +
         "Nếu chủ đề khác hẳn trước đó, bỏ lịch sử cũ. " +
@@ -679,6 +737,15 @@ const AiController = {
       const { reply, emotion } = extractEmotion(text);
 
       const cleanReply = enforceHonorifics(deProgramify(reply));
+
+      function enforceMaxWords(s, maxWords = 25) {
+        if (!s) return s;
+        const parts = String(s).trim().split(/\s+/).filter(Boolean);
+        if (parts.length <= maxWords) return s.trim();
+        return parts.slice(0, maxWords).join(' ').trim();
+      }
+
+      const finalReply = enforceMaxWords(cleanReply, 25);
 
       // TTS generation disabled: only speak on explicit user action (press in app)
       const maxTtsChars = Number(process.env.AI_TTS_MAX_CHARS || 800);
@@ -1059,7 +1126,7 @@ const AiController = {
             elder: elderId,
             sessionId,
             role: "assistant",
-            content: cleanReply,
+            content: finalReply,
             modelUsed,
             listings:
               (Array.isArray(listings?.doctors) && listings.doctors.length) ||
@@ -1078,7 +1145,7 @@ const AiController = {
       return res.status(200).json({
         success: true,
         data: {
-          reply: cleanReply,
+          reply: finalReply,
           emotion,
           safety,
           listings,
