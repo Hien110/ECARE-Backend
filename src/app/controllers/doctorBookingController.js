@@ -4,7 +4,6 @@ const Relationship = require("../models/Relationship");
 const ElderlyProfile = require("../models/ElderlyProfile");
 const User = require("../models/User");
 const DoctorProfile = require("../models/DoctorProfile");
-const Payment = require("../models/Payment");
 const RegistrationConsulation = require("../models/RegistrationConsulation");
 const ConsultationPrice = require("../models/ConsultationPrice");
 const Conversation = require("../models/Conversation");
@@ -197,16 +196,7 @@ console.log("end day 2", end);
     },
   );
 
-  await Payment.updateMany(
-    {
-      serviceType: "consultation",
-      serviceId: { $in: finalIds },
-      status: { $ne: "refunded" },
-    },
-    {
-      $set: { status: "refunded" },
-    },
-  );
+  // Payment collection is not used in this deployment; skip updating Payment documents.
 
   const idSet = new Set(finalIds);
   const updatedRegs = registrations.map((reg) => {
@@ -906,20 +896,6 @@ const DoctorBookingController = {
 
         doctorRegs = await autoCancelOverdueWithoutSummary(doctorRegs);
 
-        const regIds = doctorRegs.map((r) => String(r._id));
-
-        const payments = await Payment.find({
-          serviceType: "consultation",
-          serviceId: { $in: regIds },
-        })
-          .select("_id serviceId paymentMethod status transactionId")
-          .lean();
-
-        const payByReg = new Map();
-        payments.forEach((p) => {
-          payByReg.set(String(p.serviceId), p);
-        });
-
         const mergedDoctor = doctorRegs.map((reg) => {
           const beneficiary = reg.beneficiary || null;
           const registrant = reg.registrant || null;
@@ -945,22 +921,18 @@ const DoctorBookingController = {
                 }
               : registrant;
 
-          const regId = String(reg._id);
-          const pay = payByReg.get(regId) || null;
+          const finalPaymentMethod = reg.paymentMethod ?? 'cash';
+          const finalPaymentStatus = reg.paymentStatus ?? 'unpaid';
 
           return {
             ...reg,
             beneficiary: beneficiaryWithAddress,
             registrant: registrantWithAddress,
-            payment: pay
-              ? {
-                  method: pay.paymentMethod,
-                  status: pay.status,
-                  transactionId: pay.transactionId,
-                }
+            payment: reg.paymentMethod || reg.paymentStatus
+              ? { method: reg.paymentMethod, status: reg.paymentStatus }
               : undefined,
-            paymentMethod: pay?.paymentMethod,
-            paymentStatus: pay?.status,
+            paymentMethod: finalPaymentMethod,
+            paymentStatus: finalPaymentStatus,
           };
         });
 
@@ -1031,33 +1003,18 @@ const DoctorBookingController = {
         });
       }
 
-      const regIds = registrations.map((r) => String(r._id));
-
-      const payments = await Payment.find({
-        serviceType: "consultation",
-        serviceId: { $in: regIds },
-      })
-        .select("_id serviceId paymentMethod status transactionId")
-        .lean();
-
-      const payByRegId = new Map();
-      payments.forEach((p) => payByRegId.set(String(p.serviceId), p));
-
       const merged = registrations.map((reg) => {
-        const regId = String(reg._id);
-        const pay = payByRegId.get(regId) || null;
+        // Use registration's own payment fields; the system does not use Payment collection
+        const finalPaymentMethod = reg.paymentMethod ?? 'cash';
+        const finalPaymentStatus = reg.paymentStatus ?? 'unpaid';
 
         return {
           ...reg,
-          payment: pay
-            ? {
-                method: pay.paymentMethod,
-                status: pay.status,
-                transactionId: pay.transactionId,
-              }
+          payment: reg.paymentMethod || reg.paymentStatus
+            ? { method: reg.paymentMethod, status: reg.paymentStatus }
             : undefined,
-          paymentMethod: pay?.paymentMethod,
-          paymentStatus: pay?.status,
+          paymentMethod: finalPaymentMethod,
+          paymentStatus: finalPaymentStatus,
         };
       });
 
@@ -1286,18 +1243,6 @@ const DoctorBookingController = {
 
       const regIds = registrations.map((r) => String(r._id));
 
-      const payments = await Payment.find({
-        serviceType: "consultation",
-        serviceId: { $in: regIds },
-      })
-        .select("_id serviceId paymentMethod status transactionId")
-        .lean();
-
-      const payByRegId = new Map();
-      payments.forEach((p) => {
-        payByRegId.set(String(p.serviceId), p);
-      });
-
       // Decrypt helper functions
       const crypto = require("crypto");
       const ENC_KEY = Buffer.from(process.env.ENC_KEY || "", "base64");
@@ -1358,13 +1303,21 @@ const DoctorBookingController = {
           currentAddress: tryDecryptAny(reg.registrant.currentAddress) || reg.registrant.currentAddress
         } : reg.registrant;
 
+        const finalPaymentMethod = pay?.paymentMethod ?? reg.paymentMethod ?? 'cash';
+        const finalPaymentStatus = pay?.status ?? reg.paymentStatus ?? 'unpaid';
+        const finalPaymentObj =
+          paymentObj ||
+          (reg.paymentMethod || reg.paymentStatus
+            ? { method: reg.paymentMethod, status: reg.paymentStatus }
+            : undefined);
+
         return {
           ...reg,
           beneficiary: beneficiaryDecrypted,
           registrant: registrantDecrypted,
-          payment: paymentObj || undefined,
-          paymentMethod: pay?.paymentMethod,
-          paymentStatus: pay?.status,
+          payment: finalPaymentObj,
+          paymentMethod: finalPaymentMethod,
+          paymentStatus: finalPaymentStatus,
         };
       });
 
@@ -1486,29 +1439,8 @@ const DoctorBookingController = {
 
        
 
-        const payment = await Payment.findOne({
-          serviceType: "consultation",
-          serviceId: registration._id,
-        }).session(session);
-
-        if (payment) {
-       
-
-          if (
-            payment.status !== "refunded" &&
-            payment.status !== "cancelled"
-          ) {
-            payment.status = "cancelled";
-            payment.cancelledAt = new Date();
-            await payment.save({ session });
-
-          }
-        } else {
-          console.log(
-            LOG_TAG,
-            "ℹ️ Không tìm thấy payment cho registration này",
-          );
-        }
+        // No Payment collection usage — only update registration status
+        // If business requires updating external payment records, handle that separately.
 
        
         await endDoctorRelationshipAndConversation(registration, session);
