@@ -948,19 +948,19 @@ const DoctorBookingController = {
           const regId = String(reg._id);
           const pay = payByReg.get(regId) || null;
 
+          const finalPaymentMethod = pay?.paymentMethod ?? reg.paymentMethod ?? 'cash';
+          const finalPaymentStatus = pay?.status ?? reg.paymentStatus ?? 'unpaid';
+          const finalPaymentObj = pay
+            ? { method: pay.paymentMethod, status: pay.status, transactionId: pay.transactionId }
+            : (reg.paymentMethod || reg.paymentStatus ? { method: reg.paymentMethod, status: reg.paymentStatus } : undefined);
+
           return {
             ...reg,
             beneficiary: beneficiaryWithAddress,
             registrant: registrantWithAddress,
-            payment: pay
-              ? {
-                  method: pay.paymentMethod,
-                  status: pay.status,
-                  transactionId: pay.transactionId,
-                }
-              : undefined,
-            paymentMethod: pay?.paymentMethod,
-            paymentStatus: pay?.status,
+            payment: finalPaymentObj,
+            paymentMethod: finalPaymentMethod,
+            paymentStatus: finalPaymentStatus,
           };
         });
 
@@ -1047,17 +1047,17 @@ const DoctorBookingController = {
         const regId = String(reg._id);
         const pay = payByRegId.get(regId) || null;
 
+        const finalPaymentMethod = pay?.paymentMethod ?? reg.paymentMethod ?? 'cash';
+        const finalPaymentStatus = pay?.status ?? reg.paymentStatus ?? 'unpaid';
+        const finalPaymentObj = pay
+          ? { method: pay.paymentMethod, status: pay.status, transactionId: pay.transactionId }
+          : (reg.paymentMethod || reg.paymentStatus ? { method: reg.paymentMethod, status: reg.paymentStatus } : undefined);
+
         return {
           ...reg,
-          payment: pay
-            ? {
-                method: pay.paymentMethod,
-                status: pay.status,
-                transactionId: pay.transactionId,
-              }
-            : undefined,
-          paymentMethod: pay?.paymentMethod,
-          paymentStatus: pay?.status,
+          payment: finalPaymentObj,
+          paymentMethod: finalPaymentMethod,
+          paymentStatus: finalPaymentStatus,
         };
       });
 
@@ -1137,13 +1137,18 @@ const DoctorBookingController = {
           status: pay.status,
           transactionId: pay.transactionId,
         };
+      } else if (registration.paymentMethod || registration.paymentStatus) {
+        paymentObj = {
+          method: registration.paymentMethod,
+          status: registration.paymentStatus,
+        };
       }
 
       const result = {
         ...registration,
         payment: paymentObj || undefined,
-        paymentMethod: paymentObj?.method,
-        paymentStatus: paymentObj?.status,
+        paymentMethod: paymentObj?.method ?? registration.paymentMethod ?? 'cash',
+        paymentStatus: paymentObj?.status ?? registration.paymentStatus ?? 'unpaid',
       };
 
       return res.json({
@@ -1358,13 +1363,19 @@ const DoctorBookingController = {
           currentAddress: tryDecryptAny(reg.registrant.currentAddress) || reg.registrant.currentAddress
         } : reg.registrant;
 
+        const finalPaymentMethod = pay?.paymentMethod ?? reg.paymentMethod ?? 'cash';
+        const finalPaymentStatus = pay?.status ?? reg.paymentStatus ?? 'unpaid';
+        const finalPaymentObj = pay
+          ? { method: pay.paymentMethod, status: pay.status, transactionId: pay.transactionId }
+          : (reg.paymentMethod || reg.paymentStatus ? { method: reg.paymentMethod, status: reg.paymentStatus } : undefined);
+
         return {
           ...reg,
           beneficiary: beneficiaryDecrypted,
           registrant: registrantDecrypted,
-          payment: paymentObj || undefined,
-          paymentMethod: pay?.paymentMethod,
-          paymentStatus: pay?.status,
+          payment: finalPaymentObj || undefined,
+          paymentMethod: finalPaymentMethod,
+          paymentStatus: finalPaymentStatus,
         };
       });
 
