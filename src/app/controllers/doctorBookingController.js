@@ -473,8 +473,9 @@ const DoctorBookingController = {
       if (doc && typeof doc.price === "number") {
         price = doc.price;
       } else {
-        price =
-          RegistrationConsulation.schema.path("price").defaultValue || 0;
+        // RegistrationConsulation no longer contains `price` field;
+        // fallback safe default
+        price = 200000;
       }
 
       return res.json({
@@ -582,7 +583,6 @@ const DoctorBookingController = {
         note: note || "",
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
-        price: resolvedPrice,
       });
 
       await registration.save();
