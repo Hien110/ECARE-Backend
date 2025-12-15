@@ -1909,6 +1909,37 @@ getAcceptRelationshipByFamilyIdAdmin: async (req, res) => {
   }
 },
   // Admin: Lấy danh sách lịch hẹn supporter theo status
+  // Admin: Lấy lịch khám bác sĩ và lịch hẹn supporter đã hoàn thành
+  getCompletedSchedules: async (req, res) => {
+    try {
+      // Lấy lịch khám bác sĩ có status = 'completed'
+      const completedConsultations = await RegistrationConsulation.find({ status: 'completed' })
+        .populate({ path: 'doctor', select: 'fullName phoneNumber email' })
+        .populate({ path: 'registrant', select: 'fullName phoneNumber email' })
+        .populate({ path: 'beneficiary', select: 'fullName phoneNumber email' })
+        .sort({ registeredAt: -1 });
+
+      // Lấy lịch hẹn supporter có status = 'completed'
+      const completedSupporterSchedules = await SupporterScheduling.find({ status: 'completed' })
+        .populate({ path: 'supporter', select: 'fullName phoneNumber email' })
+        .populate({ path: 'registrant', select: 'fullName phoneNumber email' })
+        .populate({ path: 'elderly', select: 'fullName phoneNumber email' })
+        .populate({ path: 'service', select: 'name' })
+        .sort({ startDate: -1 });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          completedConsultations,
+          completedSupporterSchedules
+        }
+      });
+    } catch (err) {
+      console.error('[getCompletedSchedules] Error:', err);
+      return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hoàn thành' });
+    }
+  },
+
   getSupporterSchedulesByStatus: async (req, res) => {
     try {
       const { status } = req.query;
