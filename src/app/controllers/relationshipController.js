@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Relationship = require("../models/Relationship.js");
 const User = require("../models/User.js");
 const Conversation = require("../models/Conversation.js");
+const socketConfig = require("../../config/socket/socketConfig");
 
 // Helper function để giải mã số điện thoại
 const decryptPhoneNumbers = (relationships) => {
@@ -192,6 +193,14 @@ const RelationshipController = {
 
       const decryptedRelationship = decryptPhoneNumbers([savedRelationship])[0];
 
+      try {
+        if (decryptedRelationship && decryptedRelationship.elderly && decryptedRelationship.elderly._id) {
+          socketConfig.emitToUser(String(decryptedRelationship.elderly._id), 'relationship_request_created', { relationship: decryptedRelationship });
+        }
+      } catch (emitErr) {
+        console.error('Socket emit error (createRelationship):', emitErr.message);
+      }
+
       return res.status(201).json({
         success: true,
         message: "Yêu cầu kết nối đã được gửi thành công",
@@ -306,6 +315,16 @@ const RelationshipController = {
         return { ...p.toObject(), user: decUser };
       });
 
+      // Emit real-time event to both elderly and family/supporter about accepted relationship
+      try {
+        const elderId = decryptedRelationship?.elderly?._id && String(decryptedRelationship.elderly._id);
+        const familyIdStr = decryptedRelationship?.family?._id && String(decryptedRelationship.family._id);
+        if (elderId) socketConfig.emitToUser(elderId, 'relationship_created', { relationship: decryptedRelationship });
+        if (familyIdStr) socketConfig.emitToUser(familyIdStr, 'relationship_created', { relationship: decryptedRelationship });
+      } catch (emitErr) {
+        console.error('Socket emit error (connectSupporterToElderly):', emitErr.message);
+      }
+
       return res.status(201).json({
         success: true,
         message: "Kết nối thành công: relationship đã accepted và conversation đã sẵn sàng (không tạo trùng).",
@@ -411,6 +430,30 @@ const RelationshipController = {
         conversation = await newConversation.save();
       }
 
+      // Populate and emit updates to involved users
+      try {
+        await relationship.populate("elderly", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("family", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("requestedBy", "fullName phoneNumber phoneNumberEnc");
+        const decryptedRel = decryptPhoneNumbers([relationship])[0];
+
+        const elderId = decryptedRel?.elderly?._id && String(decryptedRel.elderly._id);
+        const famId = decryptedRel?.family?._id && String(decryptedRel.family._id);
+        const requesterId = decryptedRel?.requestedBy?._id && String(decryptedRel.requestedBy._id);
+
+        if (requesterId) {
+          socketConfig.emitToUser(requesterId, 'relationship_request_updated', { relationship: decryptedRel });
+        }
+        if (elderId) {
+          socketConfig.emitToUser(elderId, 'relationship_updated', { relationship: decryptedRel });
+        }
+        if (famId) {
+          socketConfig.emitToUser(famId, 'relationship_updated', { relationship: decryptedRel });
+        }
+      } catch (emitErr) {
+        console.error('Socket emit error (acceptRelationship):', emitErr.message);
+      }
+
       return res.status(200).json({
         success: true,
         message: existingConversation
@@ -459,6 +502,23 @@ const RelationshipController = {
       relationship.status = "rejected";
       relationship.respondedAt = new Date();
       await relationship.save();
+      // Emit update to involved users
+      try {
+        await relationship.populate("elderly", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("family", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("requestedBy", "fullName phoneNumber phoneNumberEnc");
+        const decryptedRel = decryptPhoneNumbers([relationship])[0];
+        const elderId = decryptedRel?.elderly?._id && String(decryptedRel.elderly._id);
+        const famId = decryptedRel?.family?._id && String(decryptedRel.family._id);
+        const requesterId = decryptedRel?.requestedBy?._id && String(decryptedRel.requestedBy._id);
+
+        if (requesterId) socketConfig.emitToUser(requesterId, 'relationship_request_updated', { relationship: decryptedRel });
+        if (elderId) socketConfig.emitToUser(elderId, 'relationship_updated', { relationship: decryptedRel });
+        if (famId) socketConfig.emitToUser(famId, 'relationship_updated', { relationship: decryptedRel });
+      } catch (emitErr) {
+        console.error('Socket emit error (rejectRelationship):', emitErr.message);
+      }
+
       return res.status(200).json({
         success: true,
         message: "Mối quan hệ đã bị từ chối",
@@ -540,11 +600,10 @@ const RelationshipController = {
     }
   },
 
-  // Lấy tất cả mối quan hệ theo familyId (truyền vào param), trả về tên đã populate và giải mã số điện thoại
   getAllRelationshipsByFamilyId: async (req, res) => {
     try {
       const { familyId } = req.params;
-      const { status } = req.query; // optional: filter theo trạng thái
+      const { status } = req.query; 
 
       if (!familyId) {
         return res.status(400).json({
@@ -570,6 +629,8 @@ const RelationshipController = {
       const findFilter = { family: familyId };
       if (status) {
         findFilter.status = status;
+      } else {
+        findFilter.status = "accepted";
       }
 
       const relationships = await Relationship.find(findFilter)
@@ -639,6 +700,24 @@ const RelationshipController = {
       }
       relationship.status = "cancelled";
       await relationship.save();
+
+      // Emit deletion to involved users
+      try {
+        await relationship.populate("elderly", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("family", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("requestedBy", "fullName phoneNumber phoneNumberEnc");
+        const decryptedRel = decryptPhoneNumbers([relationship])[0];
+        const elderId = decryptedRel?.elderly?._id && String(decryptedRel.elderly._id);
+        const famId = decryptedRel?.family?._id && String(decryptedRel.family._id);
+        const requesterId = decryptedRel?.requestedBy?._id && String(decryptedRel.requestedBy._id);
+
+        if (requesterId) socketConfig.emitToUser(requesterId, 'relationship_request_updated', { relationship: decryptedRel });
+        if (elderId) socketConfig.emitToUser(elderId, 'relationship_deleted', { relationship: decryptedRel });
+        if (famId) socketConfig.emitToUser(famId, 'relationship_deleted', { relationship: decryptedRel });
+      } catch (emitErr) {
+        console.error('Socket emit error (cancelRelationship):', emitErr.message);
+      }
+
       return res.status(200).json({
         success: true,
         message: "Đã hủy kết nối thành công",
@@ -678,6 +757,24 @@ const RelationshipController = {
       }
       relationship.status = "cancelled";
       await relationship.save();
+
+      // Emit deletion to involved users
+      try {
+        await relationship.populate("elderly", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("family", "fullName phoneNumber phoneNumberEnc");
+        await relationship.populate("requestedBy", "fullName phoneNumber phoneNumberEnc");
+        const decryptedRel = decryptPhoneNumbers([relationship])[0];
+        const elderId = decryptedRel?.elderly?._id && String(decryptedRel.elderly._id);
+        const famId = decryptedRel?.family?._id && String(decryptedRel.family._id);
+        const requesterId = decryptedRel?.requestedBy?._id && String(decryptedRel.requestedBy._id);
+
+        if (requesterId) socketConfig.emitToUser(requesterId, 'relationship_request_updated', { relationship: decryptedRel });
+        if (elderId) socketConfig.emitToUser(elderId, 'relationship_deleted', { relationship: decryptedRel });
+        if (famId) socketConfig.emitToUser(famId, 'relationship_deleted', { relationship: decryptedRel });
+      } catch (emitErr) {
+        console.error('Socket emit error (cancelByElderlyAndFamily):', emitErr.message);
+      }
+
       return res.status(200).json({
         success: true,
         message: "Đã hủy kết nối thành công",
@@ -688,6 +785,36 @@ const RelationshipController = {
         success: false,
         message: "Đã xảy ra lỗi khi hủy kết nối",
       });
+    }
+  },
+
+  checkRelationshipsBulk: async (req, res) => {
+    try {
+      const { elderlyId, familyIds } = req.body || {};
+      if (!elderlyId) return res.status(400).json({ success: false, message: 'Thiếu elderlyId' });
+      if (!Array.isArray(familyIds) || familyIds.length === 0) {
+        return res.status(200).json({ success: true, data: [] });
+      }
+
+      const rels = await Relationship.find({ elderly: elderlyId, family: { $in: familyIds } }).lean();
+
+      const map = new Map();
+      rels.forEach(r => {
+        const famId = String(r.family);
+        map.set(famId, {
+          familyId: famId,
+          status: r.status || null,
+          relationship: r.relationship || null,
+          requestedBy: r.requestedBy || null,
+        });
+      });
+
+      const result = familyIds.map(fid => map.get(String(fid)) || { familyId: String(fid), status: null, relationship: null, requestedBy: null });
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      console.error('checkRelationshipsBulk error:', err);
+      return res.status(500).json({ success: false, message: err.message });
     }
   },
 };

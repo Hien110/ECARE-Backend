@@ -8,6 +8,7 @@ const authenticateToken = require("../app/middlewares/authMiddleware");
 
 router.use(authenticateToken);
 router.post("/create", RelationshipController.createRelationship);
+router.post('/check-status-bulk', RelationshipController.checkRelationshipsBulk);
 router.get("/requests", RelationshipController.getRequestRelationshipsById);
 router.put("/request/:relationshipId/accept", RelationshipController.acceptRelationship);
 router.put("/request/:relationshipId/reject", RelationshipController.rejectRelationship);
