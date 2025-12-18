@@ -27,13 +27,6 @@ const mongoose = require('mongoose');
     );
 const ConsultationPrice = mongoose.model('ConsultationPrice', ConsultationPriceSchema);
 
-ConsultationPrice.ensureDefault = async function ensureDefault() {
-  const existing = await this.findOne({ serviceName: 'doctor_consultation' });
-  if (existing) return existing;
-
-  const doc = new this({ serviceName: 'doctor_consultation' });
-  await doc.save();
-  return doc;
-};
+// (previous helper `ensureDefault` removed — price must be managed via a ConsultationPrice document)
 
 module.exports = ConsultationPrice;

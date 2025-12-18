@@ -434,53 +434,21 @@ const DoctorBookingController = {
       });
     }
   },
-
-  logDefaultConsultationPrice: async () => {
-    try {
-      const doc = await ConsultationPrice.findOne({
-        serviceName: "doctor_consultation",
-        isActive: true,
-      }).lean();
-
-      const fallback =
-        RegistrationConsulation.schema.path("price").defaultValue || 0;
-
-      const price =
-        doc && typeof doc.price === "number" ? doc.price : fallback;
-
-      // In ra log server để kiểm tra
-      console.log("[DoctorBooking] Giá dịch vụ mặc định hiện tại:", price);
-
-      return price;
-    } catch (err) {
-      console.error(
-        "[DoctorBooking] Lỗi khi lấy giá dịch vụ mặc định:",
-        err,
-      );
-      return null;
-    }
-  },
-
   getDefaultConsultationPrice: async (req, res) => {
     try {
-      const doc = await ConsultationPrice.findOne({
-        serviceName: "doctor_consultation",
+      // Try exact configured serviceName first, then fall back to any active price
+      let doc = await ConsultationPrice.findOne({
+        serviceName: 'doctor_consultation',
         isActive: true,
       }).lean();
 
-      let price;
-
-      if (doc && typeof doc.price === "number") {
-        price = doc.price;
-      } else {
-        price =
-          RegistrationConsulation.schema.path("price").defaultValue || 0;
+      if (!doc) {
+        doc = await ConsultationPrice.findOne({ isActive: true }).sort({ updatedAt: -1 }).lean();
       }
 
-      return res.json({
-        success: true,
-        data: { price },
-      });
+      const price = doc && typeof doc.price === 'number' ? doc.price : null;
+
+      return res.json({ success: true, data: { price } });
     } catch (err) {
       return res.status(500).json({
         success: false,
@@ -557,15 +525,7 @@ const DoctorBookingController = {
         });
       }
 
-      const priceConfig = await ConsultationPrice.findOne({
-        serviceName: "doctor_consultation",
-        isActive: true,
-      }).lean();
-
-      const resolvedPrice =
-        priceConfig && typeof priceConfig.price === "number"
-          ? priceConfig.price
-          : RegistrationConsulation.schema.path("price").defaultValue || 0;
+      // No per-registration price is set here; the system reads price from ConsultationPrice centrally.
 
       const normalizedPaymentMethod =
         paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
@@ -582,7 +542,6 @@ const DoctorBookingController = {
         note: note || "",
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
-        price: resolvedPrice,
       });
 
       await registration.save();
