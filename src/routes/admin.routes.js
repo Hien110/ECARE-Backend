@@ -46,6 +46,8 @@ router.get("/users/:userId", AdminController.getUserById);
 // Admin: dashboard stats
 router.get("/dashboard", AdminController.getDashboard);
 router.get("/completed-schedules", AdminController.getCompletedSchedules);
+router.get("/supporter-schedules", AdminController.getAllSupporterSchedules);
+router.get("/doctor-schedules", AdminController.getAllDoctorSchedules);
 
 // Admin: registered health packages (list & detail)
 router.get("/registered-packages", AdminController.getRegisteredPackages);
