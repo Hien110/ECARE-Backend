@@ -12,6 +12,7 @@ router.post('/', supporterSchedulingController.createScheduling);
 router.post('/list', supporterSchedulingController.getSchedulingsByUserId);
 router.post('/check-completion', supporterSchedulingController.checkAllCompletedOrCanceled);
 router.post('/supporter-list', supporterSchedulingController.getSchedulingsBySupporterId);
+router.post('/by-status', supporterSchedulingController.getSchedulingsByStatus);
 router.get('/supporter-detail/:id', supporterSchedulingController.getSupporterDetail);
 router.get('/:id', supporterSchedulingController.getSchedulingById);
 router.put('/:id/status', supporterSchedulingController.updateSchedulingStatus);
