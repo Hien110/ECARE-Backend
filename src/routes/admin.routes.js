@@ -61,11 +61,16 @@ router.get("/nearby-doctors", AdminController.getNearbyDoctors);
 // Admin status check
 router.get("/status", AdminController.checkAdminStatus);
 router.get("/relationship/accepted-family/:familyId", AdminController.getAcceptRelationshipByFamilyIdAdmin);
+router.get("/relationship/accepted-elderly/:elderlyId", AdminController.getAcceptRelationshipByElderlyIdAdmin);
+
 // Refresh admin token (không cần authorize vì đã có authenticateToken)
 router.post("/refresh-token", AdminController.refreshAdminToken);
 router.put("/reset-password/:userId", AdminController.resetUserPassword);
-// Admin: Lấy danh sách lịch hẹn supporter theo status
-router.get("/supporter-schedules", AdminController.getSupporterSchedulesByStatus);
+// Admin: Lấy danh sách lịch hẹn supporter theo ID
+router.get("/supporter-schedules/:supporterId", AdminController.getSupporterSchedulesById);
+// lấy danh sách lịch hẹn supporter theo ID người già
+router.get("/supporter-schedules/elderly/:elderlyId", AdminController.getSupporterSchedulesByElderlyId);
+// Lấy gói dịch vụ theo bác sĩ
 router.get("/package/:doctorId", AdminController.getPackagesByDoctor);
 
 module.exports = router;
