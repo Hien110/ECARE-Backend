@@ -7,7 +7,7 @@ const RegistrationConsulation = require("../models/RegistrationConsulation");
 const ConsultationSummary = require("../models/ConsultationSummary");
 const { normalizePhoneVN, hmacIndex } = require("../../utils/cryptoFields");
 const crypto = require('crypto');
-const XLSX = require('xlsx');9
+const XLSX = require('xlsx');
 const Payment = require("../models/Payment");
 
 if (!mongoose.models.RegistrationHealthPackage) {
@@ -979,348 +979,540 @@ const AdminController = {
   },
 
   bulkImportSupporters: async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ success: false, message: "Không có file được upload" });
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Không có file được upload" });
+    }
+
+    const XLSX = require("xlsx");
+    const bcrypt = require("bcrypt");
+    const User = require("../models/User");
+    const SupporterProfile = require("../models/SupporterProfile");
+
+    // ===== Helpers (match createSupporter) =====
+    const ALLOWED_GENDERS = ["Nam", "Nữ", "Khác"];
+
+    const cleanField = (v) =>
+      typeof v === "string" && v.startsWith("'") ? v.slice(1) : v;
+
+    const normalizeGender = (genderRaw) => {
+      if (!genderRaw) return genderRaw;
+
+      let g = String(genderRaw).replace(/^'+|'+$/g, "").trim().toLowerCase();
+
+      if (g === "nam" || g === "male") return "Nam";
+      if (g === "nữ" || g === "nu" || g === "female") return "Nữ";
+      if (g === "khác" || g === "khac" || g === "other") return "Khác";
+
+      // nếu nhập bậy -> để nguyên, validate sẽ bắt lỗi
+      return g.charAt(0).toUpperCase() + g.slice(1);
+    };
+
+    // Excel date: có thể là số serial hoặc string
+    const parseDOB = (v) => {
+      if (v == null || v === "") return null;
+
+      // nếu là Date object
+      if (v instanceof Date && !isNaN(v.getTime())) return v;
+
+      // nếu là number (Excel serial)
+      if (typeof v === "number") {
+        const parsed = XLSX.SSF.parse_date_code(v);
+        if (!parsed) return null;
+        const d = new Date(parsed.y, parsed.m - 1, parsed.d);
+        return isNaN(d.getTime()) ? null : d;
       }
 
-      // Đọc file Excel
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(worksheet);
+      // string
+      const s = String(v).trim();
+      if (!s) return null;
 
-      if (data.length === 0) {
-        return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
+      // cố gắng parse thẳng
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d;
+
+      // hỗ trợ dd/mm/yyyy
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m) {
+        const day = Number(m[1]);
+        const month = Number(m[2]);
+        const year = Number(m[3]);
+        const dd = new Date(year, month - 1, day);
+        return isNaN(dd.getTime()) ? null : dd;
       }
 
-      const results = {
-        success: [],
-        errors: [],
-        total: data.length
-      };
+      return null;
+    };
 
-      // Xử lý từng dòng dữ liệu
-      for (let i = 0; i < data.length; i++) {
+    // validate tối thiểu giống createSupporter
+    const validateRowLikeCreateSupporter = (row) => {
+      const errors = [];
 
-        const row = data[i];
-        const rowNumber = i + 2; // +2 vì Excel bắt đầu từ 1 và có header
-        try {
-          // Loại bỏ ký tự nháy đơn ở đầu các trường có thể bị lỗi từ Excel
-          const cleanField = v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v;
-          row.phoneNumber = cleanField(row.phoneNumber);
-          row.password = cleanField(row.password);
-          row.dateOfBirth = cleanField(row.dateOfBirth);
-          row.identityCard = cleanField(row.identityCard);
-          // Chuẩn hóa gender: loại bỏ khoảng trắng, ký tự nháy đơn, viết hoa chữ cái đầu
-          if (row.gender) {
-            let g = String(row.gender).replace(/^'+|'+$/g, '').trim().toLowerCase();
-            if (g === 'nam' || g === 'male') row.gender = 'Nam';
-            else if (g === 'nữ' || g === 'nu' || g === 'female') row.gender = 'Nữ';
-            else if (g === 'khác' || g === 'other') row.gender = 'Khác';
-            else {
-              // Chỉ lấy đúng enum: Nam, Nữ, Khác
-              if (g === 'nam') row.gender = 'Nam';
-              else if (g === 'nữ') row.gender = 'Nữ';
-              else if (g === 'khác') row.gender = 'Khác';
-              else row.gender = g.charAt(0).toUpperCase() + g.slice(1);
-            }
-          }
+      if (!row.fullName) errors.push("Thiếu fullName");
+      if (!row.phoneNumber) errors.push("Thiếu phoneNumber");
+      if (!row.gender) errors.push("Thiếu gender");
+      if (!row.password) errors.push("Thiếu password");
+      if (!row.dateOfBirth) errors.push("Thiếu dateOfBirth");
+      if (!row.identityCard) errors.push("Thiếu identityCard");
 
-          // Validate dữ liệu
-          const validation = validateSupporterRow(row, rowNumber);
-          if (!validation.isValid) {
-            results.errors.push({
-              row: rowNumber,
-              errors: validation.errors,
-              data: row
-            });
-            continue;
-          }
+      if (row.gender && !ALLOWED_GENDERS.includes(row.gender)) {
+        errors.push("Giới tính không hợp lệ (Nam/Nữ/Khác)");
+      }
 
-          // Chuẩn hóa số điện thoại
-          const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
-          if (!normalizedPhone) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại không hợp lệ"],
-              data: row
-            });
-            continue;
-          }
-          const localPhone = normalizedPhone.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
-          const phoneHashesToCheck = [...new Set([
-            hmacIndex(normalizedPhone),
-            localPhone ? hmacIndex(localPhone) : null
-          ].filter(Boolean))];
+      if (row.password && String(row.password).length < 6) {
+        errors.push("Mật khẩu phải có ít nhất 6 ký tự");
+      }
 
-          // Kiểm tra trùng số điện thoại
-          const existingUser = await User.findOne({
-            isActive: true,
-            phoneNumberHash: { $in: phoneHashesToCheck }
-          });
-          if (existingUser) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại đã được sử dụng"],
-              data: row
-            });
-            continue;
-          }
+      return { isValid: errors.length === 0, errors };
+    };
 
-          // Kiểm tra email nếu có
-          let emailNorm = null;
-          if (row.email?.trim()) {
-            emailNorm = row.email.trim().toLowerCase();
-            const emailHash = hmacIndex(emailNorm);
-            const existingEmail = await User.findOne({ emailHash, isActive: true });
-            if (existingEmail) {
-              results.errors.push({
-                row: rowNumber,
-                errors: ["Email đã được sử dụng"],
-                data: row
-              });
-              continue;
-            }
-          }
+    // ===== Đọc file Excel =====
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(worksheet);
 
-          // Kiểm tra identityCard nếu có
-          let identityCardStr = null;
-          let identityCardHash = null;
-          if (row.identityCard != null && String(row.identityCard).trim()) {
-            identityCardStr = String(row.identityCard).trim();
-            identityCardHash = hmacIndex(identityCardStr);
-            const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
-            if (existingIdentityCard) {
-              results.errors.push({
-                row: rowNumber,
-                errors: ["CMND/CCCD đã được sử dụng"],
-                data: row
-              });
-              continue;
-            }
-          }
+    if (!data || data.length === 0) {
+      return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
+    }
 
-          // Hash password
-          const hashedPassword = await bcrypt.hash(String(row.password), 12);
-          const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
+    const results = {
+      success: [],
+      errors: [],
+      total: data.length,
+    };
 
-          // Tạo user qua setter để plugin hoạt động
-          const user = new User();
-          user.fullName = row.fullName.trim();
-          user.gender = row.gender;
-          user.password = hashedPassword;
-          user.role = "supporter";
-          user.isActive = true;
-          user.dateOfBirth = parsedDateOfBirth;
-          user.phoneNumber = normalizedPhone; // setter sẽ mã hóa và sinh hash
-          if (emailNorm) user.email = emailNorm;
-          if (row.address?.trim()) user.address = row.address.trim();
-          if (identityCardStr) user.identityCard = identityCardStr;
+    // ===== Xử lý từng dòng =====
+    for (let i = 0; i < data.length; i++) {
+      const rowNumber = i + 2; // +2 vì excel có header
+      let row = data[i];
 
-          await user.save();
+      try {
+        // 1) Clean các field dễ bị "'..."
+        row = {
+          ...row,
+          fullName: cleanField(row.fullName),
+          phoneNumber: cleanField(row.phoneNumber),
+          password: cleanField(row.password),
+          dateOfBirth: cleanField(row.dateOfBirth),
+          email: cleanField(row.email),
+          address: cleanField(row.address),
+          identityCard: cleanField(row.identityCard),
+        };
 
-          // Tạo supporter profile
-          await SupporterProfile.create({
-            user: user._id,
-            sessionFee: { morning: 0, afternoon: 0, evening: 0 }
-          });
+        // 2) Chuẩn hoá gender -> đúng enum createSupporter
+        row.gender = normalizeGender(row.gender);
 
-          results.success.push({
-            row: rowNumber,
-            userId: user._id,
-            fullName: user.fullName,
-            phoneNumber: normalizedPhone
-          });
-
-        } catch (err) {
-          console.error(`❌ [AdminController.bulkImportSupporters] Error at row ${rowNumber}:`, err);
+        // 3) Validate giống createSupporter
+        const validation = validateRowLikeCreateSupporter(row);
+        if (!validation.isValid) {
           results.errors.push({
             row: rowNumber,
-            errors: [err.message || "Lỗi không xác định"],
-            data: row
+            errors: validation.errors,
+            data: row,
           });
+          continue;
         }
+
+        // 4) Chuẩn hoá phone giống createSupporter
+        const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
+        if (!normalizedPhone) {
+          results.errors.push({
+            row: rowNumber,
+            errors: ["Số điện thoại không hợp lệ"],
+            data: row,
+          });
+          continue;
+        }
+
+        const localPhone = normalizedPhone.startsWith("84")
+          ? "0" + normalizedPhone.slice(2)
+          : normalizedPhone;
+
+        const phoneHashesToCheck = [...new Set([
+          hmacIndex(normalizedPhone),
+          localPhone ? hmacIndex(localPhone) : null,
+        ].filter(Boolean))];
+
+        // Check trùng phone (y hệt createSupporter)
+        const existingUser = await User.findOne({
+          isActive: true,
+          phoneNumberHash: { $in: phoneHashesToCheck },
+        });
+
+        if (existingUser) {
+          results.errors.push({
+            row: rowNumber,
+            errors: ["Số điện thoại đã được sử dụng"],
+            data: row,
+          });
+          continue;
+        }
+
+        // 5) Check trùng identityCard (y hệt createSupporter)
+        const identityCardStr = String(row.identityCard).trim();
+        const identityCardHash = identityCardStr ? hmacIndex(identityCardStr) : null;
+
+        if (!identityCardHash) {
+          results.errors.push({
+            row: rowNumber,
+            errors: ["CMND/CCCD không hợp lệ"],
+            data: row,
+          });
+          continue;
+        }
+
+        const existingIdentityCard = await User.findOne({
+          identityCardHash,
+          isActive: true,
+        });
+
+        if (existingIdentityCard) {
+          results.errors.push({
+            row: rowNumber,
+            errors: ["CMND/CCCD đã được sử dụng"],
+            data: row,
+          });
+          continue;
+        }
+
+        // 6) Parse dateOfBirth
+        const parsedDateOfBirth = parseDOB(row.dateOfBirth);
+        if (!parsedDateOfBirth) {
+          results.errors.push({
+            row: rowNumber,
+            errors: ["dateOfBirth không hợp lệ"],
+            data: row,
+          });
+          continue;
+        }
+
+        // 7) Hash password (saltRounds=12 giống createSupporter)
+        const hashedPassword = await bcrypt.hash(String(row.password), 12);
+
+        // 8) Tạo user: dùng setter để đảm bảo hash/plugin hoạt động
+        const user = new User();
+        user.fullName = String(row.fullName).trim();
+        user.gender = row.gender;
+        user.password = hashedPassword;
+        user.role = "supporter";
+        user.isActive = true;
+        user.dateOfBirth = parsedDateOfBirth;
+
+        // setter phoneNumber nên tự sinh phoneNumberHash (nếu schema có setter/plugin)
+        user.phoneNumber = normalizedPhone;
+
+        // optional fields giống createSupporter
+        if (row.email?.trim()) {
+          const emailNorm = String(row.email).trim().toLowerCase();
+          user.email = emailNorm; // nếu có setter/emailHash sẽ tự chạy
+          // NOTE: createSupporter không check trùng email, nên mình không block ở đây
+        }
+
+        if (row.address?.trim()) {
+          user.address = String(row.address).trim();
+        }
+
+        user.identityCard = identityCardStr; // setter/hash nếu có
+
+        await user.save();
+
+        // 9) Tạo SupporterProfile theo createSupporter (experience)
+        const experience = row.experience || {};
+        await SupporterProfile.create({
+          user: user._id,
+          experience: {
+            totalYears: Number(experience?.totalYears || 0),
+            description: String(experience?.description || ""),
+          },
+        });
+
+        results.success.push({
+          row: rowNumber,
+          userId: user._id,
+          fullName: user.fullName,
+          role: user.role,
+          isActive: user.isActive,
+          phoneNumber: normalizedPhone,
+        });
+      } catch (err) {
+        console.error(`❌ [AdminController.bulkImportSupporters] Error at row ${rowNumber}:`, err);
+        results.errors.push({
+          row: rowNumber,
+          errors: [err?.message || "Lỗi không xác định"],
+          data: row,
+        });
       }
-
-
-      return res.status(200).json({
-        success: true,
-        message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
-        data: results
-      });
-
-    } catch (err) {
-      console.error("❌ [AdminController.bulkImportSupporters] Error:", err);
-      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
     }
-  },
+
+    return res.status(200).json({
+      success: true,
+      message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
+      data: results,
+    });
+  } catch (err) {
+    console.error("❌ [AdminController.bulkImportSupporters] Error:", err);
+    return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
+  }
+},
+
 
   bulkImportDoctors: async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ success: false, message: "Không có file được upload" });
-      }
-
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(worksheet);
-
-      if (data.length === 0) {
-        return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
-      }
-      const results = {
-        success: [],
-        errors: [],
-        total: data.length
-      };
-
-      for (let i = 0; i < data.length; i++) {
-        const row = data[i];
-        const rowNumber = i + 2;
-        try {
-          // Loại bỏ ký tự nháy đơn ở đầu các trường có thể bị lỗi từ Excel
-          const cleanField = v => (typeof v === 'string' && v.startsWith("'")) ? v.slice(1) : v;
-          row.phoneNumber = cleanField(row.phoneNumber);
-          row.password = cleanField(row.password);
-          row.dateOfBirth = cleanField(row.dateOfBirth);
-          row.identityCard = cleanField(row.identityCard);
-          // Chuẩn hóa gender: loại bỏ khoảng trắng, ký tự nháy đơn, viết hoa chữ cái đầu
-          if (row.gender) {
-            let g = String(row.gender).replace(/^'+|'+$/g, '').trim().toLowerCase();
-            if (g === 'nam' || g === 'male') row.gender = 'Nam';
-            else if (g === 'nữ' || g === 'nu' || g === 'female') row.gender = 'Nữ';
-            else if (g === 'khác' || g === 'other') row.gender = 'Khác';
-            else {
-              // Chỉ lấy đúng enum: Nam, Nữ, Khác
-              if (g === 'nam') row.gender = 'Nam';
-              else if (g === 'nữ') row.gender = 'Nữ';
-              else if (g === 'khác') row.gender = 'Khác';
-              else row.gender = g.charAt(0).toUpperCase() + g.slice(1);
-            }
-          }
-
-          // Validate dữ liệu
-          const validation = validateDoctorRow(row, rowNumber);
-          if (!validation.isValid) {
-            results.errors.push({
-              row: rowNumber,
-              errors: validation.errors,
-              data: row
-            });
-            continue;
-          }
-
-          // Chuẩn hóa số điện thoại
-          const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
-          if (!normalizedPhone) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại không hợp lệ"],
-              data: row
-            });
-            continue;
-          }
-          const localPhone = normalizedPhone.startsWith('84') ? '0' + normalizedPhone.slice(2) : normalizedPhone;
-          const phoneHashesToCheck = [...new Set([
-            hmacIndex(normalizedPhone),
-            localPhone ? hmacIndex(localPhone) : null
-          ].filter(Boolean))];
-
-          // Kiểm tra trùng số điện thoại
-          const existingUser = await User.findOne({
-            isActive: true,
-            phoneNumberHash: { $in: phoneHashesToCheck }
-          });
-          if (existingUser) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại đã được sử dụng"],
-              data: row
-            });
-            continue;
-          }
-
-          // Kiểm tra email nếu có
-          let emailNorm = null;
-          if (row.email?.trim()) {
-            emailNorm = row.email.trim().toLowerCase();
-            const emailHash = hmacIndex(emailNorm);
-            const existingEmail = await User.findOne({ emailHash, isActive: true });
-            if (existingEmail) {
-              results.errors.push({
-                row: rowNumber,
-                errors: ["Email đã được sử dụng"],
-                data: row
-              });
-              continue;
-            }
-          }
-
-          // Kiểm tra identityCard nếu có
-          let identityCardStr = null;
-          let identityCardHash = null;
-          if (row.identityCard != null && String(row.identityCard).trim()) {
-            identityCardStr = String(row.identityCard).trim();
-            identityCardHash = hmacIndex(identityCardStr);
-            const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
-            if (existingIdentityCard) {
-              results.errors.push({
-                row: rowNumber,
-                errors: ["CMND/CCCD đã được sử dụng"],
-                data: row
-              });
-              continue;
-            }
-          }
-
-          // Hash password
-          const hashedPassword = await bcrypt.hash(String(row.password), 12);
-          const parsedDateOfBirth = parseDateFromExcel(row.dateOfBirth);
-
-          // Tạo user qua setter để plugin hoạt động
-          const user = new User();
-          user.fullName = row.fullName.trim();
-          user.gender = row.gender;
-          user.password = hashedPassword;
-          user.role = "doctor";
-          user.isActive = true;
-          user.dateOfBirth = parsedDateOfBirth;
-          user.phoneNumber = normalizedPhone; // setter sẽ mã hóa và sinh hash
-          if (emailNorm) user.email = emailNorm;
-          if (row.address?.trim()) user.address = row.address.trim();
-          if (identityCardStr) user.identityCard = identityCardStr;
-
-          await user.save();
-
-          results.success.push({
-            row: rowNumber,
-            userId: user._id,
-            fullName: user.fullName,
-            phoneNumber: normalizedPhone,
-            email: emailNorm
-          });
-        } catch (err) {
-          console.error(`❌ [AdminController.bulkImportDoctors] Error at row ${rowNumber}:`, err);
-          results.errors.push({
-            row: rowNumber,
-            errors: [err.message || "Lỗi không xác định"],
-            data: row
-          });
-        }
-      }
-      return res.status(200).json({
-        success: true,
-        message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
-        data: results
-      });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Không có file được upload" });
     }
-  }
 
-  ,
+    const XLSX = require("xlsx");
+    const bcrypt = require("bcrypt");
+    const User = require("../models/User");
+    const DoctorProfile = require("../models/DoctorProfile");
+
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(worksheet);
+
+    if (!data || data.length === 0) {
+      return res.status(400).json({ success: false, message: "File Excel không có dữ liệu" });
+    }
+
+    const results = {
+      success: [],
+      errors: [],
+      total: data.length,
+    };
+
+    // ===== Helpers (match createDoctor) =====
+    const ALLOWED_GENDERS = ["Nam", "Nữ", "Khác"];
+
+    const cleanField = (v) =>
+      typeof v === "string" && v.startsWith("'") ? v.slice(1) : v;
+
+    const normalizeGender = (genderRaw) => {
+      if (!genderRaw) return genderRaw;
+      let g = String(genderRaw).replace(/^'+|'+$/g, "").trim().toLowerCase();
+
+      if (g === "nam" || g === "male") return "Nam";
+      if (g === "nữ" || g === "nu" || g === "female") return "Nữ";
+      if (g === "khác" || g === "khac" || g === "other") return "Khác";
+
+      return g.charAt(0).toUpperCase() + g.slice(1);
+    };
+
+    const parseDOB = (v) => {
+      if (v == null || v === "") return null;
+
+      if (v instanceof Date && !isNaN(v.getTime())) return v;
+
+      // Excel serial number
+      if (typeof v === "number") {
+        const parsed = XLSX.SSF.parse_date_code(v);
+        if (!parsed) return null;
+        const d = new Date(parsed.y, parsed.m - 1, parsed.d);
+        return isNaN(d.getTime()) ? null : d;
+      }
+
+      const s = String(v).trim();
+      if (!s) return null;
+
+      // direct parse
+      const d1 = new Date(s);
+      if (!isNaN(d1.getTime())) return d1;
+
+      // dd/mm/yyyy or dd-mm-yyyy
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m) {
+        const day = Number(m[1]);
+        const month = Number(m[2]);
+        const year = Number(m[3]);
+        const d2 = new Date(year, month - 1, day);
+        return isNaN(d2.getTime()) ? null : d2;
+      }
+
+      return null;
+    };
+
+    const validateRowLikeCreateDoctor = (row) => {
+      const errors = [];
+
+      if (!row.fullName) errors.push("Thiếu thông tin bắt buộc: fullName");
+      if (!row.phoneNumber) errors.push("Thiếu thông tin bắt buộc: phoneNumber");
+      if (!row.gender) errors.push("Thiếu thông tin bắt buộc: gender");
+      if (!row.password) errors.push("Thiếu thông tin bắt buộc: password");
+      if (!row.dateOfBirth) errors.push("Thiếu thông tin bắt buộc: dateOfBirth");
+      if (!row.identityCard) errors.push("Thiếu thông tin bắt buộc: identityCard");
+
+      if (row.gender && !ALLOWED_GENDERS.includes(row.gender)) {
+        errors.push("Giới tính không hợp lệ");
+      }
+
+      if (row.password && String(row.password).length < 6) {
+        errors.push("Mật khẩu phải có ít nhất 6 ký tự");
+      }
+
+      return { isValid: errors.length === 0, errors };
+    };
+
+    // ===== Process rows =====
+    for (let i = 0; i < data.length; i++) {
+      const rowNumber = i + 2; // header at row 1
+      let row = data[i];
+
+      try {
+        // clean & normalize fields
+        row = {
+          ...row,
+          fullName: cleanField(row.fullName),
+          phoneNumber: cleanField(row.phoneNumber),
+          gender: normalizeGender(cleanField(row.gender)),
+          password: cleanField(row.password),
+          email: cleanField(row.email),
+          dateOfBirth: cleanField(row.dateOfBirth),
+          address: cleanField(row.address),
+          identityCard: cleanField(row.identityCard),
+
+          // doctor fields
+          specialization: cleanField(row.specialization),
+          experience: cleanField(row.experience),
+          description: cleanField(row.description),
+        };
+
+        // validate required like createDoctor
+        const validation = validateRowLikeCreateDoctor(row);
+        if (!validation.isValid) {
+          results.errors.push({ row: rowNumber, errors: validation.errors, data: row });
+          continue;
+        }
+
+        // normalize phone like createDoctor
+        const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
+        if (!normalizedPhone) {
+          results.errors.push({ row: rowNumber, errors: ["Số điện thoại không hợp lệ"], data: row });
+          continue;
+        }
+
+        const localPhone = normalizedPhone.startsWith("84")
+          ? "0" + normalizedPhone.slice(2)
+          : normalizedPhone;
+
+        const phoneHashesToCheck = [...new Set([
+          hmacIndex(normalizedPhone),
+          localPhone ? hmacIndex(localPhone) : null,
+        ].filter(Boolean))];
+
+        const existingPhone = await User.findOne({
+          isActive: true,
+          phoneNumberHash: { $in: phoneHashesToCheck },
+        });
+        if (existingPhone) {
+          results.errors.push({ row: rowNumber, errors: ["Số điện thoại đã được sử dụng"], data: row });
+          continue;
+        }
+
+        // email check like createDoctor (only if has email)
+        let emailNorm = null;
+        if (row.email?.trim()) {
+          emailNorm = String(row.email).trim().toLowerCase();
+          const emailHash = hmacIndex(emailNorm);
+          const existingEmail = await User.findOne({ emailHash, isActive: true });
+          if (existingEmail) {
+            results.errors.push({ row: rowNumber, errors: ["Email đã được sử dụng"], data: row });
+            continue;
+          }
+        }
+
+        // identityCard required + uniqueness like createDoctor
+        const identityCardStr = String(row.identityCard).trim();
+        const identityCardHash = hmacIndex(identityCardStr);
+        const existingIdentityCard = await User.findOne({ identityCardHash, isActive: true });
+        if (existingIdentityCard) {
+          results.errors.push({ row: rowNumber, errors: ["CMND/CCCD đã được sử dụng"], data: row });
+          continue;
+        }
+
+        // dateOfBirth parse
+        const parsedDateOfBirth = parseDOB(row.dateOfBirth);
+        if (!parsedDateOfBirth) {
+          results.errors.push({ row: rowNumber, errors: ["dateOfBirth không hợp lệ"], data: row });
+          continue;
+        }
+
+        // hash password
+        const hashedPassword = await bcrypt.hash(String(row.password), 12);
+
+        // create User (prefer setter/plugin)
+        const user = new User();
+        user.fullName = String(row.fullName).trim();
+        user.gender = row.gender;
+        user.password = hashedPassword;
+        user.role = "doctor";
+        user.isActive = true;
+        user.dateOfBirth = parsedDateOfBirth;
+        user.phoneNumber = normalizedPhone;
+
+        if (emailNorm) {
+          user.email = emailNorm;
+          // nếu schema không tự set emailHash, bạn có thể set thủ công:
+          // user.emailHash = hmacIndex(emailNorm);
+        }
+
+        if (row.address?.trim()) user.address = String(row.address).trim();
+
+        user.identityCard = identityCardStr;
+        // nếu schema không tự set identityCardHash, bạn có thể set thủ công:
+        // user.identityCardHash = identityCardHash;
+
+        await user.save();
+
+        // create DoctorProfile like createDoctor
+        const profileData = {
+          user: user._id,
+          specialization: String(row.specialization || "").trim(),
+          experience: parseInt(row.experience, 10) || 0,
+          description: String(row.description || "").trim(),
+          ratingStats: {
+            averageRating: 0,
+            totalRatings: 0,
+          },
+          stats: {
+            totalConsultations: 0,
+          },
+        };
+
+        const doctorProfile = await DoctorProfile.create(profileData);
+
+        results.success.push({
+          row: rowNumber,
+          userId: user._id,
+          doctorProfileId: doctorProfile._id,
+          fullName: user.fullName,
+          phoneNumber: normalizedPhone,
+          email: emailNorm || null,
+          specialization: profileData.specialization,
+          experience: profileData.experience,
+        });
+      } catch (err) {
+        console.error(`❌ [AdminController.bulkImportDoctors] Error at row ${rowNumber}:`, err);
+        results.errors.push({
+          row: rowNumber,
+          errors: [err?.message || "Lỗi không xác định"],
+          data: row,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
+      data: results,
+    });
+  } catch (err) {
+    console.error("❌ [AdminController.bulkImportDoctors] Error:", err);
+    return res.status(500).json({ success: false, message: "Đã xảy ra lỗi khi import file Excel" });
+  }
+},
+
 
   // Admin: Lấy danh sách các đăng ký gói khám (mặc định chỉ các đăng ký có beneficiary là người già)
   getRegisteredPackages: async (req, res) => {
@@ -1939,6 +2131,39 @@ getAcceptRelationshipByFamilyIdAdmin: async (req, res) => {
       return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hoàn thành' });
     }
   },
+
+  // Lấy toàn bộ danh sách lịch hẹn supporter
+  getAllSupporterSchedules: async (req, res) => {
+    try {
+      const schedules = await SupporterScheduling.find()
+        .populate({ path: 'supporter', select: 'fullName phoneNumber email' })
+        .populate({ path: 'elderly', select: 'fullName phoneNumber email' })
+        .populate({ path: 'service', select: 'name' })
+        .sort({ createdAt: -1 });
+      return res.status(200).json({ success: true, data: schedules });
+    } catch (err) {
+      console.error('[getAllSupporterSchedules] Error:', err);
+      return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hẹn supporter' });
+    }
+  },
+
+  //Lấy toàn bộ danh sách lịch hẹn doctor
+  getAllDoctorSchedules: async (req, res) => {
+    try {
+      const schedules = await RegistrationConsulation.find()
+        .populate({ path: 'doctor', select: 'fullName phoneNumber email' })
+        .populate({ path: 'beneficiary', select: 'fullName phoneNumber email' })
+        .populate({ path: 'registrant', select: 'fullName phoneNumber email' })
+        .sort({ createdAt: -1 });
+      return res.status(200).json({ success: true, data: schedules });
+    } catch (err) {
+      console.error('[getAllDoctorSchedules] Error:', err);
+      return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi khi lấy danh sách lịch hẹn doctor' });
+    }
+  },
+  
+
+  // Lấy danh sách lịch hẹn supporter theo trạng thái
 
   getSupporterSchedulesByStatus: async (req, res) => {
     try {
