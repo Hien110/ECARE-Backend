@@ -853,6 +853,129 @@ const schedulingController = {
     });
   }
 },
+
+  // Lấy danh sách đặt lịch theo status (dùng cho Home screen)
+  getSchedulingsByStatus: async (req, res) => {
+    try {
+      const { userId, status, limit = 10 } = req.body || {};
+
+      if (!userId) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Thiếu userId." });
+      }
+
+      if (!status) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Thiếu status." });
+      }
+
+      const query = { supporter: userId, status };
+
+      const items = await SupporterScheduling.find(query)
+        .sort({ startDate: 1 })
+        .limit(Number(limit))
+        .populate("supporter", projectUser)
+        .populate("elderly", "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar currentAddress")
+        .populate("registrant", projectUser)
+        .populate("service", "name price numberOfDays")
+        .lean();
+
+      const crypto = require("crypto");
+      const ENC_KEY = Buffer.from(process.env.ENC_KEY || "", "base64");
+
+      const decryptLegacy = (enc) => {
+        if (!enc) return null;
+        try {
+          const [ivB64, ctB64, tagB64] = String(enc).split(":");
+          const iv = Buffer.from(ivB64, "base64");
+          const ct = Buffer.from(ctB64, "base64");
+          const tag = Buffer.from(tagB64, "base64");
+          const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+          d.setAuthTag(tag);
+          return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const decryptGCM = (packed) => {
+        if (!packed) return null;
+        try {
+          const [ivB64, tagB64, dataB64] = String(packed).split(".");
+          const iv = Buffer.from(ivB64, "base64url");
+          const tag = Buffer.from(tagB64, "base64url");
+          const data = Buffer.from(dataB64, "base64url");
+          const d = crypto.createDecipheriv("aes-256-gcm", ENC_KEY, iv);
+          d.setAuthTag(tag);
+          return Buffer.concat([d.update(data), d.final()]).toString("utf8");
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const tryDecryptAny = (v) => {
+        if (v == null || v === "") return null;
+        const s = String(v);
+        try {
+          if (s.includes(".")) {
+            const dec = decryptGCM(s);
+            if (dec != null) return dec;
+          }
+          if (s.includes(":")) {
+            const dec = decryptLegacy(s);
+            if (dec != null) return dec;
+          }
+          return s;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const pick = (obj, keys) => {
+        for (const k of keys) {
+          const v = obj?.[k];
+          if (v != null && v !== "") return v;
+        }
+        return null;
+      };
+
+      const data = items.map((it) => {
+        const addressDecrypted = it.address ? tryDecryptField(it.address) : "";
+        const phoneNumberElderly = it.elderly?.phoneNumberEnc
+          ? tryDecryptAny(it.elderly.phoneNumberEnc)
+          : "";
+        
+        // Sử dụng pick để xử lý currentAddress (plaintext, không cần decrypt)
+        const currentAddressRaw = pick(it.elderly, ["currentAddressEnc", "currentAddress"]);
+        const currentAddressDecrypted = currentAddressRaw ? tryDecryptAny(currentAddressRaw) : "";
+        
+        return {
+          ...it,
+          address: addressDecrypted,
+          phoneNumberElderly,
+          elderly: {
+            ...it.elderly,
+            currentAddress: currentAddressDecrypted || "",
+          },
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Lấy danh sách đặt lịch thành công",
+        data,
+      });
+    } catch (error) {
+      console.error("Error fetching schedulings by status:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Lấy danh sách đặt lịch thất bại",
+        error: error?.message || error,
+      });
+    }
+  },
 };
 
 module.exports = schedulingController;
