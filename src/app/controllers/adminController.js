@@ -1227,303 +1227,219 @@ const AdminController = {
   },
 
   bulkImportSupporters: async (req, res) => {
-    try {
-      if (!req.file) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Không có file được upload" });
+  try {
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Không có file được upload" });
+    }
+
+    const XLSX = require("xlsx");
+    const bcrypt = require("bcrypt");
+    const User = require("../models/User");
+    const SupporterProfile = require("../models/SupporterProfile");
+
+    /* ================= Helpers ================= */
+
+    const ALLOWED_GENDERS = ["Nam", "Nữ", "Khác"];
+
+    const cleanField = (v) =>
+      typeof v === "string" && v.startsWith("'") ? v.slice(1) : v;
+
+    const normalizeGender = (genderRaw) => {
+      if (!genderRaw) return genderRaw;
+
+      const g = String(genderRaw)
+        .replace(/^'+|'+$/g, "")
+        .trim()
+        .toLowerCase();
+
+      if (g === "nam" || g === "male") return "Nam";
+      if (g === "nữ" || g === "nu" || g === "female") return "Nữ";
+      if (g === "khác" || g === "khac" || g === "other") return "Khác";
+
+      return g.charAt(0).toUpperCase() + g.slice(1);
+    };
+
+    // ===== normalize header: xoá space, newline =====
+    const normalizeRowKeys = (obj) => {
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) {
+        const nk = String(k).replace(/\s+/g, "");
+        out[nk] = v;
+      }
+      return out;
+    };
+
+    // ===== parse dateOfBirth =====
+    const parseDOB = (v) => {
+      if (!v) return null;
+
+      if (v instanceof Date && !isNaN(v.getTime())) return v;
+
+      if (typeof v === "number") {
+        const parsed = XLSX.SSF.parse_date_code(v);
+        if (!parsed) return null;
+        const d = new Date(parsed.y, parsed.m - 1, parsed.d);
+        return isNaN(d.getTime()) ? null : d;
       }
 
-      const XLSX = require("xlsx");
-      const bcrypt = require("bcrypt");
-      const User = require("../models/User");
-      const SupporterProfile = require("../models/SupporterProfile");
+      const s = String(v).trim();
+      if (!s) return null;
 
-      // ===== Helpers (match createSupporter) =====
-      const ALLOWED_GENDERS = ["Nam", "Nữ", "Khác"];
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d;
 
-      const cleanField = (v) =>
-        typeof v === "string" && v.startsWith("'") ? v.slice(1) : v;
-
-      const normalizeGender = (genderRaw) => {
-        if (!genderRaw) return genderRaw;
-
-        let g = String(genderRaw)
-          .replace(/^'+|'+$/g, "")
-          .trim()
-          .toLowerCase();
-
-        if (g === "nam" || g === "male") return "Nam";
-        if (g === "nữ" || g === "nu" || g === "female") return "Nữ";
-        if (g === "khác" || g === "khac" || g === "other") return "Khác";
-
-        // nếu nhập bậy -> để nguyên, validate sẽ bắt lỗi
-        return g.charAt(0).toUpperCase() + g.slice(1);
-      };
-
-      // Excel date: có thể là số serial hoặc string
-      const parseDOB = (v) => {
-        if (v == null || v === "") return null;
-
-        // nếu là Date object
-        if (v instanceof Date && !isNaN(v.getTime())) return v;
-
-        // nếu là number (Excel serial)
-        if (typeof v === "number") {
-          const parsed = XLSX.SSF.parse_date_code(v);
-          if (!parsed) return null;
-          const d = new Date(parsed.y, parsed.m - 1, parsed.d);
-          return isNaN(d.getTime()) ? null : d;
-        }
-
-        // string
-        const s = String(v).trim();
-        if (!s) return null;
-
-        // cố gắng parse thẳng
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) return d;
-
-        // hỗ trợ dd/mm/yyyy
-        const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-        if (m) {
-          const day = Number(m[1]);
-          const month = Number(m[2]);
-          const year = Number(m[3]);
-          const dd = new Date(year, month - 1, day);
-          return isNaN(dd.getTime()) ? null : dd;
-        }
-
-        return null;
-      };
-
-      // validate tối thiểu giống createSupporter
-      const validateRowLikeCreateSupporter = (row) => {
-        const errors = [];
-
-        if (!row.fullName) errors.push("Thiếu fullName");
-        if (!row.phoneNumber) errors.push("Thiếu phoneNumber");
-        if (!row.gender) errors.push("Thiếu gender");
-        if (!row.password) errors.push("Thiếu password");
-        if (!row.dateOfBirth) errors.push("Thiếu dateOfBirth");
-        if (!row.identityCard) errors.push("Thiếu identityCard");
-
-        if (row.gender && !ALLOWED_GENDERS.includes(row.gender)) {
-          errors.push("Giới tính không hợp lệ (Nam/Nữ/Khác)");
-        }
-
-        if (row.password && String(row.password).length < 6) {
-          errors.push("Mật khẩu phải có ít nhất 6 ký tự");
-        }
-
-        return { isValid: errors.length === 0, errors };
-      };
-
-      // ===== Đọc file Excel =====
-      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(worksheet);
-
-      if (!data || data.length === 0) {
-        return res
-          .status(400)
-          .json({ success: false, message: "File Excel không có dữ liệu" });
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m) {
+        const dd = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+        return isNaN(dd.getTime()) ? null : dd;
       }
 
-      const results = {
-        success: [],
-        errors: [],
-        total: data.length,
-      };
+      return null;
+    };
 
-      // ===== Xử lý từng dòng =====
-      for (let i = 0; i < data.length; i++) {
-        const rowNumber = i + 2; // +2 vì excel có header
-        let row = data[i];
+    const validateRow = (row) => {
+      const errors = [];
 
-        try {
-          // 1) Clean các field dễ bị "'..."
-          row = {
-            ...row,
-            fullName: cleanField(row.fullName),
-            phoneNumber: cleanField(row.phoneNumber),
-            password: cleanField(row.password),
-            dateOfBirth: cleanField(row.dateOfBirth),
-            email: cleanField(row.email),
-            address: cleanField(row.address),
-            identityCard: cleanField(row.identityCard),
-          };
+      if (!row.fullName) errors.push("Thiếu fullName");
+      if (!row.phoneNumber) errors.push("Thiếu phoneNumber");
+      if (!row.gender) errors.push("Thiếu gender");
+      if (!row.password) errors.push("Thiếu password");
+      if (!row.dateOfBirth) errors.push("Thiếu dateOfBirth");
+      if (!row.identityCard) errors.push("Thiếu identityCard");
 
-          // 2) Chuẩn hoá gender -> đúng enum createSupporter
-          row.gender = normalizeGender(row.gender);
+      if (row.gender && !ALLOWED_GENDERS.includes(row.gender)) {
+        errors.push("Giới tính không hợp lệ (Nam/Nữ/Khác)");
+      }
 
-          // 3) Validate giống createSupporter
-          const validation = validateRowLikeCreateSupporter(row);
-          if (!validation.isValid) {
-            results.errors.push({
-              row: rowNumber,
-              errors: validation.errors,
-              data: row,
-            });
-            continue;
-          }
+      if (row.password && String(row.password).length < 6) {
+        errors.push("Mật khẩu phải ≥ 6 ký tự");
+      }
 
-          // 4) Chuẩn hoá phone giống createSupporter
-          const normalizedPhone = normalizePhoneVN(String(row.phoneNumber));
-          if (!normalizedPhone) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại không hợp lệ"],
-              data: row,
-            });
-            continue;
-          }
+      return { isValid: errors.length === 0, errors };
+    };
 
-          const localPhone = normalizedPhone.startsWith("84")
-            ? "0" + normalizedPhone.slice(2)
-            : normalizedPhone;
+    /* ================= Read Excel ================= */
 
-          const phoneHashesToCheck = [
-            ...new Set(
-              [
-                hmacIndex(normalizedPhone),
-                localPhone ? hmacIndex(localPhone) : null,
-              ].filter(Boolean)
-            ),
-          ];
+    const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
 
-          // Check trùng phone (y hệt createSupporter)
-          const existingUser = await User.findOne({
-            isActive: true,
-            phoneNumberHash: { $in: phoneHashesToCheck },
-          });
+    // defval để ô trống vẫn có key
+    const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
-          if (existingUser) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["Số điện thoại đã được sử dụng"],
-              data: row,
-            });
-            continue;
-          }
+    if (!rawData.length) {
+      return res
+        .status(400)
+        .json({ success: false, message: "File Excel không có dữ liệu" });
+    }
 
-          // 5) Check trùng identityCard (y hệt createSupporter)
-          const identityCardStr = String(row.identityCard).trim();
-          const identityCardHash = identityCardStr
-            ? hmacIndex(identityCardStr)
-            : null;
+    const results = { success: [], errors: [], total: rawData.length };
 
-          if (!identityCardHash) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["CMND/CCCD không hợp lệ"],
-              data: row,
-            });
-            continue;
-          }
+    /* ================= Process rows ================= */
 
-          const existingIdentityCard = await User.findOne({
-            identityCardHash,
-            isActive: true,
-          });
+    for (let i = 0; i < rawData.length; i++) {
+      const rowNumber = i + 2;
 
-          if (existingIdentityCard) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["CMND/CCCD đã được sử dụng"],
-              data: row,
-            });
-            continue;
-          }
+      try {
+        // 1) normalize header
+        let row = normalizeRowKeys(rawData[i]);
 
-          // 6) Parse dateOfBirth
-          const parsedDateOfBirth = parseDOB(row.dateOfBirth);
-          if (!parsedDateOfBirth) {
-            results.errors.push({
-              row: rowNumber,
-              errors: ["dateOfBirth không hợp lệ"],
-              data: row,
-            });
-            continue;
-          }
+        // 2) clean fields
+        row = {
+          ...row,
+          fullName: cleanField(row.fullName),
+          phoneNumber: cleanField(row.phoneNumber),
+          password: cleanField(row.password),
+          dateOfBirth: cleanField(row.dateOfBirth),
+          email: cleanField(row.email),
+          address: cleanField(row.address),
+          identityCard: cleanField(row.identityCard),
+        };
 
-          // 7) Hash password (saltRounds=12 giống createSupporter)
-          const hashedPassword = await bcrypt.hash(String(row.password), 12);
+        // 3) normalize gender
+        row.gender = normalizeGender(row.gender);
 
-          // 8) Tạo user: dùng setter để đảm bảo hash/plugin hoạt động
-          const user = new User();
-          user.fullName = String(row.fullName).trim();
-          user.gender = row.gender;
-          user.password = hashedPassword;
-          user.role = "supporter";
-          user.isActive = true;
-          user.dateOfBirth = parsedDateOfBirth;
+        // 4) validate
+        const validation = validateRow(row);
+        if (!validation.isValid) {
+          results.errors.push({ row: rowNumber, errors: validation.errors, data: row });
+          continue;
+        }
 
-          // setter phoneNumber nên tự sinh phoneNumberHash (nếu schema có setter/plugin)
-          user.phoneNumber = normalizedPhone;
+        // ===== EXPERIENCE (FIX CHÍNH) =====
+        const totalYears = Number(row["experience.totalYears"] || 0);
+        const description = String(row["experience.description"] || "");
 
-          // optional fields giống createSupporter
-          if (row.email?.trim()) {
-            const emailNorm = String(row.email).trim().toLowerCase();
-            user.email = emailNorm; // nếu có setter/emailHash sẽ tự chạy
-            // NOTE: createSupporter không check trùng email, nên mình không block ở đây
-          }
-
-          if (row.address?.trim()) {
-            user.address = String(row.address).trim();
-          }
-
-          user.identityCard = identityCardStr; // setter/hash nếu có
-
-          await user.save();
-
-          // 9) Tạo SupporterProfile theo createSupporter (experience)
-          const experience = row.experience || {};
-          await SupporterProfile.create({
-            user: user._id,
-            experience: {
-              totalYears: Number(experience?.totalYears || 0),
-              description: String(experience?.description || ""),
-            },
-          });
-
-          results.success.push({
-            row: rowNumber,
-            userId: user._id,
-            fullName: user.fullName,
-            role: user.role,
-            isActive: user.isActive,
-            phoneNumber: normalizedPhone,
-          });
-        } catch (err) {
-          console.error(
-            `❌ [AdminController.bulkImportSupporters] Error at row ${rowNumber}:`,
-            err
-          );
+        // ===== parse DOB =====
+        const dob = parseDOB(row.dateOfBirth);
+        if (!dob) {
           results.errors.push({
             row: rowNumber,
-            errors: [err?.message || "Lỗi không xác định"],
+            errors: ["dateOfBirth không hợp lệ"],
             data: row,
           });
+          continue;
         }
-      }
 
-      return res.status(200).json({
-        success: true,
-        message: `Import hoàn thành: ${results.success.length}/${results.total} thành công`,
-        data: results,
-      });
-    } catch (err) {
-      console.error("❌ [AdminController.bulkImportSupporters] Error:", err);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message: "Đã xảy ra lỗi khi import file Excel",
+        // ===== hash password =====
+        const hashedPassword = await bcrypt.hash(String(row.password), 12);
+
+        // ===== create user =====
+        const user = new User();
+        user.fullName = String(row.fullName).trim();
+        user.gender = row.gender;
+        user.password = hashedPassword;
+        user.role = "supporter";
+        user.isActive = true;
+        user.dateOfBirth = dob;
+        user.phoneNumber = String(row.phoneNumber);
+
+        if (row.email) user.email = String(row.email).trim().toLowerCase();
+        if (row.address) user.address = String(row.address).trim();
+        user.identityCard = String(row.identityCard).trim();
+
+        await user.save();
+
+        // ===== create supporter profile =====
+        await SupporterProfile.create({
+          user: user._id,
+          experience: {
+            totalYears,
+            description,
+          },
         });
+
+        results.success.push({
+          row: rowNumber,
+          userId: user._id,
+          fullName: user.fullName,
+          experience: { totalYears, description },
+        });
+      } catch (err) {
+        console.error(`❌ bulkImport row ${rowNumber}`, err);
+        results.errors.push({
+          row: rowNumber,
+          errors: [err.message || "Lỗi không xác định"],
+        });
+      }
     }
-  },
+
+    return res.status(200).json({
+      success: true,
+      message: `Import xong: ${results.success.length}/${results.total}`,
+      data: results,
+    });
+  } catch (err) {
+    console.error("❌ bulkImportSupporters", err);
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi server khi import Excel",
+    });
+  }
+},
+
 
   bulkImportDoctors: async (req, res) => {
     try {
