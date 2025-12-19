@@ -568,7 +568,7 @@ const UserController = {
     if (!userId) return res.status(401).json({ message: 'Thiếu thông tin xác thực' });
 
     const u = await User.findById(userId)
-      .select('+phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc')
+      .select('+phoneNumberEnc +emailEnc +addressEnc +identityCardEnc +currentAddressEnc +hometownEnc +bankAccountNumber +bankName +bankAccountHolderName')
       .lean();
 
     if (!u) return res.status(404).json({ message: 'Người dùng không tồn tại' });
@@ -639,6 +639,7 @@ const UserController = {
     const idCipher    = pick(u, ['identityCardEnc', 'identityCard']);
     const curAddrCiph = pick(u, ['currentAddressEnc', 'currentAddress']);
     const hometownCip = pick(u, ['hometownEnc', 'hometown']);
+    const bankAccCiph = u.bankAccountNumber;
 
     const responseUser = {
       ...u,
@@ -648,6 +649,7 @@ const UserController = {
       identityCard:   deepDecrypt(idCipher),
       currentAddress: deepDecrypt(curAddrCiph),
       hometown:       deepDecrypt(hometownCip),
+      bankAccountNumber: deepDecrypt(bankAccCiph),
       nationality:    u.nationality || 'Việt Nam',
     };
 
@@ -754,6 +756,7 @@ const UserController = {
     const idCipher    = pick(u, ['identityCardEnc', 'identityCard']);
     const curAddrCiph = pick(u, ['currentAddressEnc', 'currentAddress']);
     const hometownCip = pick(u, ['hometownEnc', 'hometown']);
+    const bankAccCiph = u.bankAccountNumber;
 
     const responseUser = {
       ...u,
@@ -763,6 +766,7 @@ const UserController = {
       identityCard:   deepDecrypt(idCipher),
       currentAddress: deepDecrypt(curAddrCiph),
       hometown:       deepDecrypt(hometownCip),
+      bankAccountNumber: deepDecrypt(bankAccCiph),
       nationality:    u.nationality || 'Việt Nam',
     };
 
@@ -778,7 +782,7 @@ const UserController = {
     delete responseUser.hometownEnc;
 
     const mask = (x,n=4)=> (typeof x === 'string' && x ? x.slice(0,n)+'***' : x);
-    console.log('[getUserInfo] masked:', {
+    console.log('[getUserByIdParam] masked:', {
       phoneNumber: mask(responseUser.phoneNumber),
       email      : mask(responseUser.email),
       identityCard: mask(responseUser.identityCard,3),
@@ -787,7 +791,7 @@ const UserController = {
     res.set('Cache-Control','no-store');
     return res.status(200).json({ data: responseUser });
   } catch (error) {
-    console.error('getUserInfo error:', error);
+    console.error('getUserByIdParam error:', error);
     return res.status(500).json({ message: 'Đã xảy ra lỗi' });
   }
 },
@@ -1530,6 +1534,79 @@ const UserController = {
     } catch (err) {
       console.error('searchElderlyByPhone error:', err);
       return res.status(500).json({ success: false, message: 'Đã xảy ra lỗi' });
+    }
+  },
+
+  // Cập nhật thông tin tài khoản ngân hàng
+  updateBankAccount: async (req, res) => {
+    try {
+      const { bankName, bankAccountNumber, bankAccountHolderName } = req.body;
+      
+      if (!bankName || !bankName.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Tên ngân hàng không được để trống" 
+        });
+      }
+
+      if (!bankAccountNumber || !bankAccountNumber.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Số tài khoản không được để trống" 
+        });
+      }
+
+      if (!bankAccountHolderName || !bankAccountHolderName.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Tên chủ tài khoản không được để trống" 
+        });
+      }
+
+      const userId = req.user.userId;
+      
+      // Prepare update data - mã hóa số tài khoản giống như currentAddress
+      const updateData = {
+        bankName: bankName.trim(),
+        bankAccountNumber: encryptField(bankAccountNumber.trim()),
+        bankAccountHolderName: bankAccountHolderName.trim()
+      };
+
+      const updatedUser = await User.findByIdAndUpdate(
+        userId,
+        updateData,
+        { new: true, select: '-password' }
+      );
+
+      if (!updatedUser) {
+        return res.status(404).json({
+          success: false,
+          message: "Không tìm thấy người dùng"
+        });
+      }
+
+      // Decrypt sensitive fields for response
+      const responseUser = {
+        ...updatedUser.toObject(),
+        bankAccountNumber: tryDecryptField(updatedUser.bankAccountNumber),
+        currentAddress: tryDecryptField(updatedUser.currentAddress),
+        phoneNumber: tryDecryptField(updatedUser.phoneNumber),
+        email: tryDecryptField(updatedUser.email),
+        address: tryDecryptField(updatedUser.address),
+        identityCard: tryDecryptField(updatedUser.identityCard)
+      };
+
+      return res.status(200).json({
+        success: true,
+        message: "Cập nhật thông tin ngân hàng thành công",
+        data: responseUser
+      });
+    } catch (err) {
+      console.error("updateBankAccount error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi server khi cập nhật thông tin ngân hàng"
+      });
     }
   },
   

@@ -1914,6 +1914,7 @@ const AdminController = {
         select:
           "fullName role gender avatar " +
           "phoneNumberEnc emailEnc addressEnc currentAddress " +
+          "bankName bankAccountNumber bankAccountHolderName " +
           "+phoneNumberEnc +emailEnc +addressEnc",
       })
       .lean();
@@ -2049,12 +2050,18 @@ const AdminController = {
           ? deepDecrypt(u.currentAddress) ?? u.currentAddress ?? ""
           : "";
 
+      const bankAccountNumber =
+        u.bankAccountNumber != null && u.bankAccountNumber !== ""
+          ? deepDecrypt(u.bankAccountNumber) ?? u.bankAccountNumber ?? ""
+          : "";
+
       const cleaned = {
         ...u,
         phoneNumber,
         email,
         address,
         currentAddress,
+        bankAccountNumber,
       };
 
       delete cleaned.phoneNumberEnc;
@@ -2088,6 +2095,52 @@ const AdminController = {
     });
   }
 },
+
+  // Admin: Cập nhật trạng thái thanh toán cho lịch tư vấn
+  updateConsultationPaymentStatus: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { paymentStatus } = req.body;
+
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "ID lịch tư vấn không hợp lệ" 
+        });
+      }
+
+      if (!paymentStatus) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Thiếu paymentStatus." 
+        });
+      }
+
+      const registration = await RegistrationConsulation.findById(id);
+      if (!registration) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Không tìm thấy lịch tư vấn" 
+        });
+      }
+
+      registration.paymentStatus = paymentStatus;
+      await registration.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Cập nhật trạng thái thanh toán thành công",
+        data: registration,
+      });
+    } catch (error) {
+      console.error("Error updating consultation payment status:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Cập nhật trạng thái thanh toán thất bại",
+        error: error?.message || error,
+      });
+    }
+  },
 
 
   // Admin: Lấy danh sách lịch tư vấn của một người cao tuổi

@@ -32,6 +32,9 @@ const userSchema = new mongoose.Schema({
     }
   }, // tọa độ địa chỉ tạm trú
 
+  bankName: { type: String },
+  bankAccountNumber: { type: String },
+  bankAccountHolderName: { type: String },
 
   coordinates: { latitude: Number, longitude: Number },
 

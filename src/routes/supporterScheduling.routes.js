@@ -16,6 +16,7 @@ router.post('/by-status', supporterSchedulingController.getSchedulingsByStatus);
 router.get('/supporter-detail/:id', supporterSchedulingController.getSupporterDetail);
 router.get('/:id', supporterSchedulingController.getSchedulingById);
 router.put('/:id/status', supporterSchedulingController.updateSchedulingStatus);
+router.put('/:id/payment-status', supporterSchedulingController.updatePaymentStatus);
 
 // ADMIN-ONLY ROUTES
 router.get('/admin/all', authorize('admin'), supporterSchedulingController.getAllSchedulingsForAdmin);

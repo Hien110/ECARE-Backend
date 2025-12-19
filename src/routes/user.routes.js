@@ -66,6 +66,9 @@ router.post("/me/avatar", upload.single("avatar"), UserController.updateAvatar);
 // Cập nhật địa chỉ hiện tại
 router.put("/update-address", UserController.updateCurrentAddress);
 
+// Cập nhật thông tin ngân hàng
+router.put("/update-bank-account", UserController.updateBankAccount);
+
 // Lấy tất cả family members theo elderlyId
 router.get("/family-members/:elderlyId", UserController.getFamilyMembersByElderlyId);
 
