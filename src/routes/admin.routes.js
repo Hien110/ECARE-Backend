@@ -53,6 +53,7 @@ router.get("/doctor-schedules", AdminController.getAllDoctorSchedules);
 router.get("/registered-packages", AdminController.getRegisteredPackages);
 router.post("/registered-packages/:registrationId/assign-doctor", AdminController.assignDoctorToRegistration);
 router.get("/registered-packages/:id", AdminController.getRegisteredPackageById);
+router.put("/registered-packages/:id/payment-status", AdminController.updateConsultationPaymentStatus);
 router.get("/consultation-schedules/beneficiary/:beneficiaryId", AdminController.getConsultationSchedulesByBeneficiary);
 
 // Admin: nearby doctors for elderly
