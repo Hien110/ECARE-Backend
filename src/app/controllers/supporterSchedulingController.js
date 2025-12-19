@@ -385,7 +385,7 @@ const schedulingController = {
           "elderly",
           "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender dateOfBirth avatar currentAddress"
         )
-        .populate("registrant", "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar")
+        .populate("registrant", "fullName role phoneNumberEnc emailEnc addressEnc identityCardEnc gender avatar bankName bankAccountNumber bankAccountHolderName")
         .populate("service", "name price numberOfDays")
         .lean();
 
@@ -468,6 +468,9 @@ const schedulingController = {
       const emailRegistrant = scheduling?.registrant?.emailEnc
         ? tryDecryptAny(scheduling?.registrant?.emailEnc)
         : "";
+      const bankAccountNumberRegistrant = scheduling?.registrant?.bankAccountNumber
+        ? tryDecryptAny(scheduling?.registrant?.bankAccountNumber)
+        : "";
 
       // Tạo response
       const responseScheduling = {
@@ -486,7 +489,8 @@ const schedulingController = {
         registrant: scheduling.registrant ? {
           ...scheduling.registrant,
           phoneNumber: phoneNumberRegistrant,
-          email: emailRegistrant
+          email: emailRegistrant,
+          bankAccountNumber: bankAccountNumberRegistrant
         } : null,
         supporter: scheduling.supporter ? {
           ...scheduling.supporter,
@@ -619,6 +623,46 @@ const schedulingController = {
     }
   },
 
+  updatePaymentStatus: async (req, res) => {
+    try {
+      const schedulingId = req.params.id;
+      const { paymentStatus } = req.body;
+      
+      if (!paymentStatus) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Thiếu paymentStatus." 
+        });
+      }
+
+      const scheduling = await SupporterScheduling.findById(schedulingId);
+      if (!scheduling) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Không tìm thấy lịch hỗ trợ" 
+        });
+      }
+
+      scheduling.paymentStatus = paymentStatus;
+      await scheduling.save();
+
+      const plain = toPlain(scheduling);
+      if (plain.address) plain.address = tryDecryptField(plain.address);
+
+      return res.status(200).json({
+        success: true,
+        message: "Cập nhật trạng thái thanh toán thành công",
+        data: plain,
+      });
+    } catch (error) {
+      console.error("Error updating payment status:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Cập nhật trạng thái thanh toán thất bại",
+        error: error?.message || error,
+      });
+    }
+  },
 
   checkAllCompletedOrCanceled: async (req, res) => {
     try {
