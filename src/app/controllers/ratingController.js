@@ -244,6 +244,84 @@ const RatingController = {
         .json({ success: false, message: "Error retrieving ratings", error });
     }
   },
+
+  // Lấy đánh giá theo Id lịch khám tư vấn
+  getRatingByConsultationId: async (req, res) => {
+    try {
+      const { consultationId } = req.params;
+
+      if (!consultationId) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu consultationId"
+        });
+      }
+
+      const rating = await Rating.findOne({
+        serviceConsultationId: consultationId,
+        ratingType: "consultation",
+        status: "active"
+      })
+        .populate("reviewer", "fullName avatar email phone")
+        .populate("reviewee", "fullName avatar")
+        .lean();
+
+      if (!rating) {
+        return res.status(404).json({
+          success: false,
+          message: "Không tìm thấy đánh giá cho lịch khám này"
+        });
+      }
+
+      res.status(200).json({ success: true, data: rating });
+    } catch (error) {
+      console.error("Error retrieving consultation rating:", error);
+      res.status(500).json({
+        success: false,
+        message: "Lỗi khi lấy đánh giá",
+        error: error.message
+      });
+    }
+  },
+
+  // Lấy đánh giá theo Id lịch hỗ trợ
+  getRatingSupportServiceById: async (req, res) => {
+    try {
+      const { serviceSupportId } = req.params;
+
+      if (!serviceSupportId) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu serviceSupportId"
+        });
+      }
+
+      const rating = await Rating.findOne({
+        serviceSupportId: serviceSupportId,
+        ratingType: "support_service",
+        status: "active"
+      })
+        .populate("reviewer", "fullName avatar email phone")
+        .populate("reviewee", "fullName avatar")
+        .lean();
+
+      if (!rating) {
+        return res.status(404).json({
+          success: false,
+          message: "Không tìm thấy đánh giá cho lịch hỗ trợ này"
+        });
+      }
+
+      res.status(200).json({ success: true, data: rating });
+    } catch (error) {
+      console.error("Error retrieving support service rating:", error);
+      res.status(500).json({
+        success: false,
+        message: "Lỗi khi lấy đánh giá",
+        error: error.message
+      });
+    }
+  },
 };
 
 module.exports = RatingController;
