@@ -719,8 +719,7 @@ const DoctorBookingController = {
   },
   getAvailableDoctors: async (req, res) => {
     try {
-
-      const { specialization } = req.query || {};
+      const { specialization, scheduledDate, slot } = req.query || {};
 
       const query = {
         role: "doctor",
@@ -749,33 +748,69 @@ const DoctorBookingController = {
         profileMap.set(String(p.user), p);
       });
 
-      let result = doctorUsers.map((u) => {
-        const profile = profileMap.get(String(u._id));
-        const ratingStats = (profile && profile.ratingStats) || {};
+      // If scheduledDate + slot provided, compute day range and fetch existing registrations for those doctors
+      let busyMap = null; // Map doctorId -> boolean (busy at requested slot)
+      if (scheduledDate && slot) {
+        const dateObj = parseLocalDateString(scheduledDate);
+        if (!dateObj) {
+          return res.status(400).json({ success: false, message: 'scheduledDate không hợp lệ' });
+        }
 
-        return {
-          doctorId: u._id,
-          fullName: u.fullName,
-          specialization: profile ? profile.specialization || null : null,
-          experience: profile ? profile.experience || null : null,
-          ratingStats: {
-            averageRating:
-              typeof ratingStats.averageRating === "number"
-                ? ratingStats.averageRating
-                : 0,
-            totalRatings:
-              typeof ratingStats.totalRatings === "number"
-                ? ratingStats.totalRatings
-                : 0,
-          },
-        };
-      });
+        const dayStart = new Date(dateObj);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(dateObj);
+        dayEnd.setHours(23, 59, 59, 999);
+
+        const regs = await RegistrationConsulation.find({
+          doctor: { $in: doctorIds },
+          status: { $nin: ['completed', 'cancelled'] },
+          scheduledDate: { $gte: dayStart, $lte: dayEnd },
+          slot: slot,
+        })
+          .select('doctor scheduledDate slot')
+          .lean();
+
+        busyMap = new Map();
+        regs.forEach((r) => {
+          if (!r || !r.doctor) return;
+          busyMap.set(String(r.doctor), true);
+        });
+      }
+
+      let result = doctorUsers
+        .filter((u) => {
+          if (busyMap && busyMap.size) {
+            return !busyMap.has(String(u._id));
+          }
+          return true;
+        })
+        .map((u) => {
+          const profile = profileMap.get(String(u._id));
+          const ratingStats = (profile && profile.ratingStats) || {};
+
+          return {
+            doctorId: u._id,
+            fullName: u.fullName,
+            specialization: profile ? profile.specialization || null : null,
+            experience: profile ? profile.experience || null : null,
+            ratingStats: {
+              averageRating:
+                typeof ratingStats.averageRating === 'number'
+                  ? ratingStats.averageRating
+                  : 0,
+              totalRatings:
+                typeof ratingStats.totalRatings === 'number'
+                  ? ratingStats.totalRatings
+                  : 0,
+            },
+          };
+        });
 
       if (specialization) {
         const keyword = String(specialization).toLowerCase();
 
         result = result.filter((d) => {
-          const spec = d.specialization || "";
+          const spec = d.specialization || '';
           return String(spec).toLowerCase().includes(keyword);
         });
       }
@@ -787,7 +822,7 @@ const DoctorBookingController = {
     } catch (err) {
       return res.status(500).json({
         success: false,
-        message: "Lỗi lấy danh sách bác sĩ",
+        message: 'Lỗi lấy danh sách bác sĩ',
       });
     }
   },
