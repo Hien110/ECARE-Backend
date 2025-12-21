@@ -34,6 +34,10 @@ const RegistrationConsulationSchema = new mongoose.Schema({
       enum: ['unpaid', 'paid', 'refunded'],
       default: 'unpaid',
     },
+    price: {
+      type: Number,
+      min: 0,
+    },
     cancelReason: { type: String, default: '' },
 }, { timestamps: true });
 module.exports = mongoose.model('RegistrationConsulation', RegistrationConsulationSchema);
