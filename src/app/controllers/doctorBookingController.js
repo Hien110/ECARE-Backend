@@ -718,114 +718,117 @@ const DoctorBookingController = {
     }
   },
   getAvailableDoctors: async (req, res) => {
-    try {
-      const { specialization, scheduledDate, slot } = req.query || {};
+  try {
+    const { specialization, scheduledDate, slot } = req.query || {};
 
-      const query = {
-        role: "doctor",
-        isActive: { $ne: false },
-      };
+    // 1) Base doctor query
+    const doctorUsers = await User.find({
+      role: "doctor",
+      isActive: { $ne: false },
+    })
+      .select("fullName role isActive avatar")
+      .lean();
 
-      const doctorUsers = await User.find(query)
-        .select("fullName role isActive")
-        .lean();
-
-      if (!doctorUsers.length) {
-        return res.json({ success: true, data: [] });
-      }
-      const doctorIds = doctorUsers.map((u) => u._id);
-
-      // Lấy thêm thông tin hồ sơ & thống kê đánh giá để hiển thị ở màn chọn bác sĩ
-      const profiles = await DoctorProfile.find({
-        user: { $in: doctorIds },
-      })
-        .select("user specialization experience ratingStats")
-        .lean();
-
-      const profileMap = new Map();
-      profiles.forEach((p) => {
-        if (!p || !p.user) return;
-        profileMap.set(String(p.user), p);
-      });
-
-      // If scheduledDate + slot provided, compute day range and fetch existing registrations for those doctors
-      let busyMap = null; // Map doctorId -> boolean (busy at requested slot)
-      if (scheduledDate && slot) {
-        const dateObj = parseLocalDateString(scheduledDate);
-        if (!dateObj) {
-          return res.status(400).json({ success: false, message: 'scheduledDate không hợp lệ' });
-        }
-
-        const dayStart = new Date(dateObj);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(dateObj);
-        dayEnd.setHours(23, 59, 59, 999);
-
-        const regs = await RegistrationConsulation.find({
-          doctor: { $in: doctorIds },
-          status: { $nin: ['completed', 'cancelled'] },
-          scheduledDate: { $gte: dayStart, $lte: dayEnd },
-          slot: slot,
-        })
-          .select('doctor scheduledDate slot')
-          .lean();
-
-        busyMap = new Map();
-        regs.forEach((r) => {
-          if (!r || !r.doctor) return;
-          busyMap.set(String(r.doctor), true);
-        });
-      }
-
-      let result = doctorUsers
-        .filter((u) => {
-          if (busyMap && busyMap.size) {
-            return !busyMap.has(String(u._id));
-          }
-          return true;
-        })
-        .map((u) => {
-          const profile = profileMap.get(String(u._id));
-          const ratingStats = (profile && profile.ratingStats) || {};
-
-          return {
-            doctorId: u._id,
-            fullName: u.fullName,
-            specialization: profile ? profile.specialization || null : null,
-            experience: profile ? profile.experience || null : null,
-            ratingStats: {
-              averageRating:
-                typeof ratingStats.averageRating === 'number'
-                  ? ratingStats.averageRating
-                  : 0,
-              totalRatings:
-                typeof ratingStats.totalRatings === 'number'
-                  ? ratingStats.totalRatings
-                  : 0,
-            },
-          };
-        });
-
-      if (specialization) {
-        const keyword = String(specialization).toLowerCase();
-
-        result = result.filter((d) => {
-          const spec = d.specialization || '';
-          return String(spec).toLowerCase().includes(keyword);
-        });
-      }
-
-      return res.json({
-        success: true,
-        data: result,
-      });
-    } catch (err) {
-      return res.status(500).json({
-        success: false,
-        message: 'Lỗi lấy danh sách bác sĩ',
-      });
+    if (!doctorUsers.length) {
+      return res.json({ success: true, data: [] });
     }
-  },
+
+    const doctorIds = doctorUsers.map((u) => u._id);
+
+    // 2) Load profiles
+    const profiles = await DoctorProfile.find({ user: { $in: doctorIds } })
+      .select("user specialization experience ratingStats")
+      .lean();
+
+    const profileMap = new Map();
+    for (const p of profiles) {
+      if (p?.user) profileMap.set(String(p.user), p);
+    }
+
+    // 3) Find busy doctors by (scheduledDate + slot)
+    //    Requirement: "completed" cũng tính là bận (đã hoàn thành buổi đó vẫn không cho đặt tiếp)
+    //    => chỉ loại "cancelled", còn "confirmed" + "completed" đều bận
+    let busySet = null;
+
+    if (scheduledDate && slot) {
+      const dateObj = parseLocalDateString(scheduledDate);
+      if (!dateObj) {
+        return res
+          .status(400)
+          .json({ success: false, message: "scheduledDate không hợp lệ" });
+      }
+
+      // Bạn nói DB đang trả đúng ngày và chỉ quan tâm ngày (không sửa timezone)
+      const dayStart = new Date(dateObj);
+      dayStart.setHours(0, 0, 0, 0);
+
+      const dayEnd = new Date(dateObj);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const regs = await RegistrationConsulation.find({
+        doctor: { $in: doctorIds },
+        // busy if NOT cancelled (=> confirmed + completed đều bận)
+        status: { $ne: "cancelled" },
+        scheduledDate: { $gte: dayStart, $lte: dayEnd },
+        slot,
+      })
+        .select("doctor")
+        .lean();
+
+      busySet = new Set(regs.map((r) => String(r.doctor)));
+    }
+
+    // 4) Build result (filter out busy)
+    let result = doctorUsers
+      .filter((u) => {
+        if (busySet && busySet.size) {
+          return !busySet.has(String(u._id));
+        }
+        return true;
+      })
+      .map((u) => {
+        const profile = profileMap.get(String(u._id));
+        const ratingStats = profile?.ratingStats || {};
+        return {
+          doctorId: u._id,
+          fullName: u.fullName,
+          specialization: profile?.specialization ?? null,
+          experience: profile?.experience ?? null,
+          avatar: u.avatar || null,
+          ratingStats: {
+            averageRating:
+              typeof ratingStats.averageRating === "number"
+                ? ratingStats.averageRating
+                : 0,
+            totalRatings:
+              typeof ratingStats.totalRatings === "number"
+                ? ratingStats.totalRatings
+                : 0,
+          },
+        };
+      });
+
+    // 5) Filter specialization (optional)
+    if (specialization) {
+      const keyword = String(specialization).trim().toLowerCase();
+      if (keyword) {
+        result = result.filter((d) =>
+          String(d.specialization || "")
+            .toLowerCase()
+            .includes(keyword)
+        );
+      }
+    }
+
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi lấy danh sách bác sĩ",
+    });
+  }
+},
+
 
   getDoctorDetail: async (req, res) => {
     try {
