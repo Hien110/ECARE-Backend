@@ -472,6 +472,7 @@ const DoctorBookingController = {
         slot,
         note,
         paymentMethod,
+        price,
       } = req.body || {};
 
       if (!doctorId || !mongoose.Types.ObjectId.isValid(doctorId)) {
@@ -542,6 +543,7 @@ const DoctorBookingController = {
         note: note || "",
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
+        price,
       });
 
       await registration.save();
@@ -795,6 +797,7 @@ const DoctorBookingController = {
           specialization: profile?.specialization ?? null,
           experience: profile?.experience ?? null,
           avatar: u.avatar || null,
+          profileDoctorId: profile?._id || null,
           ratingStats: {
             averageRating:
               typeof ratingStats.averageRating === "number"
