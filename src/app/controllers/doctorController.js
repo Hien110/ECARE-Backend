@@ -720,6 +720,8 @@ updateScheduleForDay: async (req, res) => {
     try {
       const { userId } = req.params; // bác sĩ được đánh giá
       const { rating, comment } = req.body;
+      // optional: id of the consultation/registration this review is for
+      const serviceConsultationId = req.body.serviceConsultationId || req.body.registrationId || null;
       const reviewerId = req.user?.userId || req.body.reviewerId;
 
       if (!reviewerId) return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -730,15 +732,26 @@ updateScheduleForDay: async (req, res) => {
       if (!profile) return res.status(404).json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
 
       // kiểm tra reviewer đã từng có consultation hoàn thành với bác sĩ hay chưa
-      // Cho phép cả tài khoản người đặt (registrant) lẫn người được khám (beneficiary)
-      const hasCompletedConsultation = await RegistrationConsulation.exists({
-        doctor: userId,
-        status: "completed",
-        $or: [
-          { registrant: reviewerId },
-          { beneficiary: reviewerId },
-        ],
-      });
+      // Nếu client truyền serviceConsultationId thì kiểm tra cụ thể cho lịch đó,
+      // ngược lại kiểm tra existence của bất kỳ consultation hoàn thành nào giữa reviewer và bác sĩ.
+      let hasCompletedConsultation = false;
+      if (serviceConsultationId) {
+        if (!mongoose.isValidObjectId(serviceConsultationId)) {
+          return res.status(400).json({ success: false, message: 'serviceConsultationId không hợp lệ' });
+        }
+        hasCompletedConsultation = await RegistrationConsulation.exists({
+          _id: serviceConsultationId,
+          doctor: userId,
+          status: 'completed',
+          $or: [ { registrant: reviewerId }, { beneficiary: reviewerId } ],
+        });
+      } else {
+        hasCompletedConsultation = await RegistrationConsulation.exists({
+          doctor: userId,
+          status: 'completed',
+          $or: [ { registrant: reviewerId }, { beneficiary: reviewerId } ],
+        });
+      }
 
       if (!hasCompletedConsultation) {
         return res.status(400).json({
@@ -751,7 +764,8 @@ updateScheduleForDay: async (req, res) => {
       const existed = await Rating.findOne({
         reviewer: reviewerId,
         reviewee: userId,
-        ratingType: "doctor_profile",
+        serviceConsultationId: serviceConsultationId && mongoose.isValidObjectId(serviceConsultationId) ? serviceConsultationId : { $exists: true },
+        ratingType: "consultation",
         status: { $ne: "deleted" },
       });
 
@@ -762,14 +776,19 @@ updateScheduleForDay: async (req, res) => {
         });
       }
 
-      const doc = await Rating.create({
+      const createPayload = {
         reviewer: reviewerId,
         reviewee: userId,
-        ratingType: "doctor_profile",
+        ratingType: 'consultation',
         rating,
-        comment: comment?.trim() || "",
-        status: "active",
-      });
+        comment: comment?.trim() || '',
+        status: 'active',
+      };
+      if (serviceConsultationId && mongoose.isValidObjectId(serviceConsultationId)) {
+        createPayload.serviceConsultationId = serviceConsultationId;
+      }
+
+      const doc = await Rating.create(createPayload);
 
       // update gộp ratingStats
       const stats = profile.ratingStats || { averageRating: 0, totalRatings: 0 };
@@ -812,7 +831,7 @@ updateScheduleForDay: async (req, res) => {
       if (!profile) return res.status(404).json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
 
       const rows = await Rating.aggregate([
-        { $match: { reviewee: new mongoose.Types.ObjectId(userId), ratingType: "doctor_profile", status: "active" } },
+        { $match: { reviewee: new mongoose.Types.ObjectId(userId), ratingType: "consultation", status: "active" } },
         { $group: { _id: "$rating", count: { $sum: 1 } } },
       ]);
 
