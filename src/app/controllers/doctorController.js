@@ -194,6 +194,8 @@ const DoctorController = {
           .json({ success: false, message: "Không tìm thấy hồ sơ" });
 
       await populateProfile(profile);
+      console.log(profile);
+      
       return res.status(200).json({ success: true, data: profile });
     } catch (err) {
       console.error("getDoctorProfileById error:", err);
