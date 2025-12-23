@@ -512,29 +512,22 @@ const DoctorBookingController = {
           ? registrantId
           : userId;
 
-      const existed = await RegistrationConsulation.findOne({
-        doctor: doctorId,
-        scheduledDate: dateObj,
-        slot,
-        status: { $nin: ["completed", "cancelled"] },
-      }).lean();
-
-      if (existed) {
-        return res.status(409).json({
-          success: false,
-          message: "Lịch khám này đã được đặt. Vui lòng chọn buổi khác.",
-        });
-      }
-
-      // No per-registration price is set here; the system reads price from ConsultationPrice centrally.
-
+      // Use an atomic upsert to prevent race conditions where two requests
+      // concurrently see no existing booking and both create one.
       const normalizedPaymentMethod =
         paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
 
       const initialPaymentStatus =
         normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
 
-      const registration = new RegistrationConsulation({
+      const filter = {
+        doctor: doctorId,
+        scheduledDate: dateObj,
+        slot,
+        status: { $nin: ["completed", "cancelled"] },
+      };
+
+      const insertDoc = {
         doctor: doctorId,
         registrant: registrantUserId,
         beneficiary: elderlyId,
@@ -544,9 +537,24 @@ const DoctorBookingController = {
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
         price,
-      });
+      };
 
-      await registration.save();
+      const upsertResult = await RegistrationConsulation.findOneAndUpdate(
+        filter,
+        { $setOnInsert: insertDoc },
+        { upsert: true, new: true, rawResult: true }
+      );
+
+      // If an existing active booking was found, signal conflict.
+      if (upsertResult && upsertResult.lastErrorObject && upsertResult.lastErrorObject.updatedExisting) {
+        return res.status(409).json({
+          success: false,
+          message: "Lịch khám này đã được đặt. Vui lòng chọn buổi khác.",
+        });
+      }
+
+      // Otherwise, we have created the registration (returned in upsertResult.value)
+      const registration = upsertResult.value;
 
       // Kiểm tra và xóa liên kết/conversation cũ nếu có lịch khám cuối cùng đã hoàn thành/hủy
       try {
