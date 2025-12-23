@@ -457,276 +457,374 @@ const DoctorBookingController = {
     }
   },
 
-  createRegistration: async (req, res) => {
+ createRegistration: async (req, res) => {
+  try {
+    const userId = getUserIdFromReq(req);
+
+    // Debug logging
     try {
-      const userId = getUserIdFromReq(req);
-      if (!userId) {
-        return res.status(401).json({ success: false, message: "Unauthorized" });
-      }
-
-      const {
-        doctorId,
-        elderlyId,
-        registrantId,
-        scheduledDate,
-        slot,
-        note,
-        paymentMethod,
-        price,
-      } = req.body || {};
-
-      if (!doctorId || !mongoose.Types.ObjectId.isValid(doctorId)) {
-        return res
-          .status(400)
-          .json({ success: false, message: "doctorId không hợp lệ" });
-      }
-      if (!elderlyId || !mongoose.Types.ObjectId.isValid(elderlyId)) {
-        return res
-          .status(400)
-          .json({ success: false, message: "elderlyId không hợp lệ" });
-      }
-
-      const validSlots = ["morning", "afternoon"];
-      if (!slot || !validSlots.includes(slot)) {
-        return res.status(400).json({
-          success: false,
-          message: "slot phải là 'morning' hoặc 'afternoon'",
-        });
-      }
-
-      if (!scheduledDate) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Thiếu scheduledDate" });
-      }
-
-      const dateObj = parseLocalDateString(scheduledDate);
-      if (!dateObj) {
-        return res
-          .status(400)
-          .json({ success: false, message: "scheduledDate không hợp lệ" });
-      }
-
-      const registrantUserId =
-        registrantId && mongoose.Types.ObjectId.isValid(registrantId)
-          ? registrantId
-          : userId;
-
-      // Use an atomic upsert to prevent race conditions where two requests
-      // concurrently see no existing booking and both create one.
-      const normalizedPaymentMethod =
-        paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
-
-      const initialPaymentStatus =
-        normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
-
-      const filter = {
-        doctor: doctorId,
-        scheduledDate: dateObj,
-        slot,
-        status: { $nin: ["completed", "cancelled"] },
-      };
-
-      const insertDoc = {
-        doctor: doctorId,
-        registrant: registrantUserId,
-        beneficiary: elderlyId,
-        scheduledDate: dateObj,
-        slot,
-        note: note || "",
-        paymentMethod: normalizedPaymentMethod,
-        paymentStatus: initialPaymentStatus,
-        price,
-      };
-
-      const upsertResult = await RegistrationConsulation.findOneAndUpdate(
-        filter,
-        { $setOnInsert: insertDoc },
-        { upsert: true, new: true, rawResult: true }
-      );
-
-      // If an existing active booking was found, signal conflict.
-      if (upsertResult && upsertResult.lastErrorObject && upsertResult.lastErrorObject.updatedExisting) {
-        return res.status(409).json({
-          success: false,
-          message: "Lịch khám này đã được đặt. Vui lòng chọn buổi khác.",
-        });
-      }
-
-      // Otherwise, we have created the registration (returned in upsertResult.value)
-      const registration = upsertResult.value;
-
-      // Kiểm tra và xóa liên kết/conversation cũ nếu có lịch khám cuối cùng đã hoàn thành/hủy
-      try {
-        const lastCompletedOrCancelledReg = await RegistrationConsulation.findOne({
-          doctor: doctorId,
-          beneficiary: elderlyId,
-          _id: { $ne: registration._id },
-          status: { $in: ["completed", "cancelled"] },
-        })
-          .sort({ scheduledDate: -1 })
-          .lean();
-
-        if (lastCompletedOrCancelledReg) {
-          // Xóa relationship và conversation của lịch cũ
-          await endDoctorRelationshipAndConversation(lastCompletedOrCancelledReg, null);
-        }
-      } catch (cleanupErr) {
-        // Log nhưng không block luồng chính
-        console.warn(
-          "[DoctorBookingController][createRegistration] Lỗi khi dọn dẹp liên kết cũ:",
-          cleanupErr.message
-        );
-      }
-
-      try {
-        const doctorUserId = doctorId;
-
-        const ensureOneToOneConversation = async (userA, userB) => {
-          if (!userA || !userB) return null;
-          if (String(userA) === String(userB)) return null;
-
-          // Tìm conversation 1-1 đã tồn tại (active hoặc inactive)
-          let conv = await Conversation.findOne({
-            $and: [
-              { participants: { $elemMatch: { user: userA } } },
-              { participants: { $elemMatch: { user: userB } } },
-            ],
-            "participants.2": { $exists: false },
-          });
-
-          if (!conv) {
-            conv = new Conversation({
-              participants: [{ user: userA }, { user: userB }],
-              isActive: true,
-            });
-            await conv.save();
-          } else if (!conv.isActive) {
-            // Nếu conversation tồn tại nhưng inactive, kích hoạt lại
-            conv.isActive = true;
-            await conv.save();
-          }
-
-          return conv;
-        };
-
-        const ensureDoctorPatientRelationship = async (patientId) => {
-          if (!patientId || !doctorUserId) return null;
-          if (String(patientId) === String(doctorUserId)) return null;
-
-          const filter = {
-            elderly: patientId,
-            family: doctorUserId,
-          };
-
-          let rel = await Relationship.findOne(filter);
-          if (!rel) {
-            rel = new Relationship({
-              elderly: patientId,
-              family: doctorUserId,
-              relationship: "Bác sĩ",
-              status: "accepted",
-              requestedBy: doctorUserId,
-              respondedAt: new Date(),
-            });
-            await rel.save();
-          } else {
-            let changed = false;
-            if (rel.status !== "accepted") {
-              rel.status = "accepted";
-              rel.respondedAt = new Date();
-              changed = true;
-            }
-            if (rel.relationship !== "Bác sĩ") {
-              rel.relationship = "Bác sĩ";
-              changed = true;
-            }
-            if (changed) {
-              await rel.save();
-            }
-          }
-
-          await ensureOneToOneConversation(patientId, doctorUserId);
-          return rel;
-        };
-
-        await ensureDoctorPatientRelationship(elderlyId);
-
-        if (String(registrantUserId) !== String(elderlyId)) {
-          await ensureDoctorPatientRelationship(registrantUserId);
-        }
-      } catch (autoErr) {
-      }
-
-      try {
-        const eventName = "consultation_booking_created";
-        const payload = {
-          registrationId: registration._id,
-          status: registration.status,
-          paymentStatus: registration.paymentStatus,
-        };
-
-        const notifyIds = new Set([
-          String(doctorId),
-          String(elderlyId),
-          String(registrantUserId),
-        ]);
-
-        notifyIds.forEach((uid) => {
-          if (!uid) return;
-          try {
-            socketConfig.emitToUser(uid, eventName, payload);
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("[DoctorBookingController][createRegistration] Socket emit error:", err.message);
-          }
-        });
-      } catch (socketErr) {
-        console.error("[DoctorBookingController][createRegistration] Socket outer error:", socketErr.message);
-      }
-
-      let populated = await RegistrationConsulation.findById(registration._id)
-        .populate({ path: 'doctor', select: 'fullName avatar gender currentAddress role isActive' })
-        .populate({ path: 'registrant', select: 'fullName avatar gender currentAddress role isActive' })
-        .populate({ path: 'beneficiary', select: 'fullName avatar gender dateOfBirth role currentAddress' })
-        .lean();
-
-      function isProbablyEncrypted(val) {
-        if (!val || typeof val !== 'string') return false;
-        return (val.includes('.') && val.split('.').length === 3) || (val.includes(':') && val.split(':').length === 3);
-      }
-
-      const crypto = require('crypto');
-      const ENC_KEY = Buffer.from(process.env.ENC_KEY || '', 'base64');
-      function encryptGCM(plain) {
-        if (!plain) return '';
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv('aes-256-gcm', ENC_KEY, iv);
-        const enc = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
-        const tag = cipher.getAuthTag();
-        return [iv.toString('base64url'), tag.toString('base64url'), enc.toString('base64url')].join('.');
-      }
-
-      ['beneficiary', 'registrant', 'doctor'].forEach((role) => {
-        if (populated && populated[role] && populated[role].currentAddress != null) {
-          const addr = populated[role].currentAddress;
-          if (!isProbablyEncrypted(addr)) {
-            populated[role].currentAddress = encryptGCM(addr);
-          }
-        }
+      console.log("[DoctorBookingController][createRegistration] incoming", {
+        userId: String(userId || ""),
+        bodyKeys: req?.body ? Object.keys(req.body) : [],
       });
+    } catch (_) {}
 
-      return res.status(201).json({
-        success: true,
-        data: populated || registration,
-      });
-    } catch (err) {
-      return res.status(500).json({
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const {
+      doctorId,
+      elderlyId,
+      registrantId,
+      scheduledDate,
+      slot,
+      note,
+      paymentMethod,
+      price,
+    } = req.body || {};
+
+    // Validate doctorId / elderlyId
+    if (!doctorId || !mongoose.Types.ObjectId.isValid(doctorId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "doctorId không hợp lệ" });
+    }
+    if (!elderlyId || !mongoose.Types.ObjectId.isValid(elderlyId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "elderlyId không hợp lệ" });
+    }
+
+    // Validate slot
+    const validSlots = ["morning", "afternoon"];
+    if (!slot || !validSlots.includes(slot)) {
+      return res.status(400).json({
         success: false,
-        message: "Lỗi tạo lịch khám bác sĩ",
+        message: "slot phải là 'morning' hoặc 'afternoon'",
       });
     }
-  },
+
+    // Validate scheduledDate
+    if (!scheduledDate) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Thiếu scheduledDate" });
+    }
+
+    const dateObj = parseLocalDateString(scheduledDate);
+    if (!dateObj) {
+      return res
+        .status(400)
+        .json({ success: false, message: "scheduledDate không hợp lệ" });
+    }
+
+    const registrantUserId =
+      registrantId && mongoose.Types.ObjectId.isValid(registrantId)
+        ? registrantId
+        : userId;
+
+    // Payment normalization
+    const normalizedPaymentMethod =
+      paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
+    const initialPaymentStatus =
+      normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
+
+    // ✅ Các status được coi là "đang chiếm slot"
+    // (Bạn có thể sửa theo enum thực tế của bạn)
+    const activeStatuses = ["confirmed", "in_progress"]; // nếu bạn không có in_progress thì bỏ
+
+    /** =========================
+     * 1) CHECK TRƯỚC (UX) — nhưng không đủ chống race
+     * ========================= */
+    const existed = await RegistrationConsulation.findOne({
+      doctor: doctorId,
+      scheduledDate: dateObj,
+      slot,
+      status: { $in: activeStatuses },
+    })
+      .select("_id status")
+      .lean();
+
+    if (existed?._id) {
+      return res.status(409).json({
+        success: false,
+        message: "Bác sĩ này đã có lịch khung giờ này. Vui lòng chọn buổi khác.",
+      });
+    }
+
+    /** =========================
+     * 2) CREATE (DB-level lock) — chống race bằng Unique Index
+     * ========================= */
+    const insertDoc = {
+      doctor: doctorId,
+      registrant: registrantUserId,
+      beneficiary: elderlyId,
+      scheduledDate: dateObj,
+      slot,
+      note: note || "",
+      paymentMethod: normalizedPaymentMethod,
+      paymentStatus: initialPaymentStatus,
+      price,
+      status: "confirmed", // ✅ theo enum hiện tại của bạn
+    };
+
+    let registration;
+    try {
+      registration = await RegistrationConsulation.create(insertDoc);
+    } catch (e) {
+      // ✅ nếu 2 người bấm sát nhau, người thứ 2 sẽ rơi vào đây khi DB chặn unique
+      if (e?.code === 11000) {
+        return res.status(409).json({
+          success: false,
+          message: "Bác sĩ này đã có lịch khung giờ này. Vui lòng chọn buổi khác.",
+        });
+      }
+      // Validation / other errors
+      return res.status(400).json({
+        success: false,
+        message: e?.message || "Dữ liệu không hợp lệ",
+      });
+    }
+
+    if (!registration?._id) {
+      return res.status(500).json({
+        success: false,
+        message: "Không tạo được lịch khám",
+      });
+    }
+
+    /** =========================
+     * Cleanup old completed/cancelled relationship (non-blocking)
+     * ========================= */
+    try {
+      const lastCompletedOrCancelledReg = await RegistrationConsulation.findOne({
+        doctor: doctorId,
+        beneficiary: elderlyId,
+        _id: { $ne: registration._id },
+        status: { $in: ["completed", "cancelled"] },
+      })
+        .sort({ scheduledDate: -1 })
+        .lean();
+
+      if (lastCompletedOrCancelledReg?._id) {
+        await endDoctorRelationshipAndConversation(lastCompletedOrCancelledReg, null);
+      }
+    } catch (cleanupErr) {
+      console.warn(
+        "[DoctorBookingController][createRegistration] Lỗi khi dọn dẹp liên kết cũ:",
+        cleanupErr?.message
+      );
+    }
+
+    /** =========================
+     * Auto ensure relationship + 1-1 conversation (non-blocking)
+     * ========================= */
+    try {
+      const doctorUserId = doctorId;
+
+      const ensureOneToOneConversation = async (userA, userB) => {
+        if (!userA || !userB) return null;
+        if (String(userA) === String(userB)) return null;
+
+        let conv = await Conversation.findOne({
+          $and: [
+            { participants: { $elemMatch: { user: userA } } },
+            { participants: { $elemMatch: { user: userB } } },
+          ],
+          "participants.2": { $exists: false },
+        });
+
+        if (!conv) {
+          conv = new Conversation({
+            participants: [{ user: userA }, { user: userB }],
+            isActive: true,
+          });
+          await conv.save();
+        } else if (!conv.isActive) {
+          conv.isActive = true;
+          await conv.save();
+        }
+
+        return conv;
+      };
+
+      const ensureDoctorPatientRelationship = async (patientId) => {
+        if (!patientId || !doctorUserId) return null;
+        if (String(patientId) === String(doctorUserId)) return null;
+
+        const relFilter = { elderly: patientId, family: doctorUserId };
+
+        let rel = await Relationship.findOne(relFilter);
+        if (!rel) {
+          rel = new Relationship({
+            elderly: patientId,
+            family: doctorUserId,
+            relationship: "Bác sĩ",
+            status: "accepted",
+            requestedBy: doctorUserId,
+            respondedAt: new Date(),
+          });
+          await rel.save();
+        } else {
+          let changed = false;
+          if (rel.status !== "accepted") {
+            rel.status = "accepted";
+            rel.respondedAt = new Date();
+            changed = true;
+          }
+          if (rel.relationship !== "Bác sĩ") {
+            rel.relationship = "Bác sĩ";
+            changed = true;
+          }
+          if (changed) await rel.save();
+        }
+
+        await ensureOneToOneConversation(patientId, doctorUserId);
+        return rel;
+      };
+
+      await ensureDoctorPatientRelationship(elderlyId);
+
+      if (String(registrantUserId) !== String(elderlyId)) {
+        await ensureDoctorPatientRelationship(registrantUserId);
+      }
+    } catch (autoErr) {
+      console.warn(
+        "[DoctorBookingController][createRegistration] auto ensure relationship error:",
+        autoErr?.message
+      );
+    }
+
+    /** =========================
+     * Socket notify (non-blocking)
+     * ========================= */
+    try {
+      const eventName = "consultation_booking_created";
+      const payload = {
+        registrationId: String(registration._id),
+        status: registration.status,
+        paymentStatus: registration.paymentStatus,
+      };
+
+      const notifyIds = new Set([
+        String(doctorId),
+        String(elderlyId),
+        String(registrantUserId),
+      ]);
+
+      notifyIds.forEach((uid) => {
+        if (!uid) return;
+        try {
+          socketConfig.emitToUser(uid, eventName, payload);
+        } catch (err) {
+          console.error(
+            "[DoctorBookingController][createRegistration] Socket emit error:",
+            err?.message
+          );
+        }
+      });
+    } catch (socketErr) {
+      console.error(
+        "[DoctorBookingController][createRegistration] Socket outer error:",
+        socketErr?.message
+      );
+    }
+
+    /** =========================
+     * Populate response
+     * ========================= */
+    let populated = await RegistrationConsulation.findById(registration._id)
+      .populate({
+        path: "doctor",
+        select: "fullName avatar gender currentAddress role isActive",
+      })
+      .populate({
+        path: "registrant",
+        select: "fullName avatar gender currentAddress role isActive",
+      })
+      .populate({
+        path: "beneficiary",
+        select: "fullName avatar gender dateOfBirth role currentAddress",
+      })
+      .lean();
+
+    /** =========================
+     * Encrypt currentAddress safely (non-breaking)
+     * ========================= */
+    function isProbablyEncrypted(val) {
+      if (!val || typeof val !== "string") return false;
+      return (
+        (val.includes(".") && val.split(".").length === 3) ||
+        (val.includes(":") && val.split(":").length === 3)
+      );
+    }
+
+    const crypto = require("crypto");
+    const ENC_KEY = (() => {
+      try {
+        return Buffer.from(process.env.ENC_KEY || "", "base64");
+      } catch {
+        return Buffer.alloc(0);
+      }
+    })();
+    const CAN_ENCRYPT = ENC_KEY && ENC_KEY.length === 32;
+
+    function encryptGCM(plain) {
+      if (!plain) return "";
+      if (!CAN_ENCRYPT) return String(plain);
+
+      try {
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv("aes-256-gcm", ENC_KEY, iv);
+        const enc = Buffer.concat([
+          cipher.update(String(plain), "utf8"),
+          cipher.final(),
+        ]);
+        const tag = cipher.getAuthTag();
+        return [
+          iv.toString("base64url"),
+          tag.toString("base64url"),
+          enc.toString("base64url"),
+        ].join(".");
+      } catch (e) {
+        console.warn(
+          "[DoctorBookingController][createRegistration] encryptGCM failed:",
+          e?.message
+        );
+        return String(plain);
+      }
+    }
+
+    ["beneficiary", "registrant", "doctor"].forEach((role) => {
+      if (populated?.[role]?.currentAddress != null) {
+        const addr = populated[role].currentAddress;
+        if (!isProbablyEncrypted(addr)) {
+          populated[role].currentAddress = encryptGCM(addr);
+        }
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: populated || registration,
+    });
+  } catch (err) {
+    try {
+      console.error(
+        "[DoctorBookingController][createRegistration] ERROR",
+        err && (err.stack || err)
+      );
+    } catch (_) {}
+
+    return res.status(500).json({
+      success: false,
+      message: err?.message || "Lỗi tạo lịch khám bác sĩ",
+    });
+  }
+},
+
+
   getAvailableDoctors: async (req, res) => {
   try {
     const { specialization, scheduledDate, slot } = req.query || {};
