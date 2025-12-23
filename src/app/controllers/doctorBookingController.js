@@ -512,29 +512,22 @@ const DoctorBookingController = {
           ? registrantId
           : userId;
 
-      const existed = await RegistrationConsulation.findOne({
-        doctor: doctorId,
-        scheduledDate: dateObj,
-        slot,
-        status: { $nin: ["completed", "cancelled"] },
-      }).lean();
-
-      if (existed) {
-        return res.status(409).json({
-          success: false,
-          message: "Lịch khám này đã được đặt. Vui lòng chọn buổi khác.",
-        });
-      }
-
-      // No per-registration price is set here; the system reads price from ConsultationPrice centrally.
-
+      // Use an atomic upsert to prevent race conditions where two requests
+      // concurrently see no existing booking and both create one.
       const normalizedPaymentMethod =
         paymentMethod === "bank_transfer" ? "bank_transfer" : "cash";
 
       const initialPaymentStatus =
         normalizedPaymentMethod === "bank_transfer" ? "paid" : "unpaid";
 
-      const registration = new RegistrationConsulation({
+      const filter = {
+        doctor: doctorId,
+        scheduledDate: dateObj,
+        slot,
+        status: { $nin: ["completed", "cancelled"] },
+      };
+
+      const insertDoc = {
         doctor: doctorId,
         registrant: registrantUserId,
         beneficiary: elderlyId,
@@ -544,9 +537,24 @@ const DoctorBookingController = {
         paymentMethod: normalizedPaymentMethod,
         paymentStatus: initialPaymentStatus,
         price,
-      });
+      };
 
-      await registration.save();
+      const upsertResult = await RegistrationConsulation.findOneAndUpdate(
+        filter,
+        { $setOnInsert: insertDoc },
+        { upsert: true, new: true, rawResult: true }
+      );
+
+      // If an existing active booking was found, signal conflict.
+      if (upsertResult && upsertResult.lastErrorObject && upsertResult.lastErrorObject.updatedExisting) {
+        return res.status(409).json({
+          success: false,
+          message: "Lịch khám này đã được đặt. Vui lòng chọn buổi khác.",
+        });
+      }
+
+      // Otherwise, we have created the registration (returned in upsertResult.value)
+      const registration = upsertResult.value;
 
       // Kiểm tra và xóa liên kết/conversation cũ nếu có lịch khám cuối cùng đã hoàn thành/hủy
       try {
@@ -781,35 +789,49 @@ const DoctorBookingController = {
     }
 
     // 4) Build result (filter out busy)
-    let result = doctorUsers
-      .filter((u) => {
-        if (busySet && busySet.size) {
-          return !busySet.has(String(u._id));
-        }
-        return true;
-      })
-      .map((u) => {
-        const profile = profileMap.get(String(u._id));
-        const ratingStats = profile?.ratingStats || {};
-        return {
-          doctorId: u._id,
-          fullName: u.fullName,
-          specialization: profile?.specialization ?? null,
-          experience: profile?.experience ?? null,
-          avatar: u.avatar || null,
-          profileDoctorId: profile?._id || null,
-          ratingStats: {
-            averageRating:
-              typeof ratingStats.averageRating === "number"
-                ? ratingStats.averageRating
-                : 0,
-            totalRatings:
-              typeof ratingStats.totalRatings === "number"
-                ? ratingStats.totalRatings
-                : 0,
-          },
-        };
+    let candidates = doctorUsers.filter((u) => {
+      if (busySet && busySet.size) {
+        return !busySet.has(String(u._id));
+      }
+      return true;
+    });
+
+    // Prepare basic result entries
+    let result = candidates.map((u) => {
+      const profile = profileMap.get(String(u._id));
+      return {
+        doctorId: u._id,
+        fullName: u.fullName,
+        specialization: profile?.specialization ?? null,
+        experience: profile?.experience ?? null,
+        avatar: u.avatar || null,
+        profileDoctorId: profile?._id || null,
+        // will attach ratingSummary below
+        ratingSummary: null,
+      };
+    });
+
+    // 5) Enrich with live rating summaries computed from Rating collection
+    try {
+      const doctorIdObjs = candidates.map((u) => new mongoose.Types.ObjectId(u._id));
+      const agg = await Rating.aggregate([
+        { $match: { reviewee: { $in: doctorIdObjs }, status: 'active', ratingType: { $in: ['consultation','doctor_profile'] } } },
+        { $group: { _id: '$reviewee', total: { $sum: 1 }, avg: { $avg: '$rating' } } },
+      ]);
+
+      const summaryMap = new Map();
+      agg.forEach((r) => {
+        summaryMap.set(String(r._id), { total: r.total || 0, avg: r.avg ? Number(Number(r.avg).toFixed(2)) : 0 });
       });
+
+      result = result.map((it) => {
+        const s = summaryMap.get(String(it.doctorId));
+        return { ...it, ratingSummary: s || { total: 0, avg: 0 } };
+      });
+    } catch (e) {
+      // ignore enrichment errors and leave ratingSummary null
+      console.error('getAvailableDoctors ratingSummary enrichment error:', e);
+    }
 
     // 5) Filter specialization (optional)
     if (specialization) {
@@ -823,6 +845,7 @@ const DoctorBookingController = {
       }
     }
 
+    res.set && res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
     return res.json({ success: true, data: result });
   } catch (err) {
     return res.status(500).json({
@@ -860,6 +883,21 @@ const DoctorBookingController = {
         )
         .lean();
 
+      // attach live rating summary (authoritative) to profile to avoid stale ratingStats
+      try {
+        const agg = await Rating.aggregate([
+          { $match: { reviewee: new mongoose.Types.ObjectId(doctorId), status: 'active', ratingType: { $in: ['consultation','doctor_profile'] } } },
+          { $group: { _id: null, total: { $sum: 1 }, avg: { $avg: '$rating' } } },
+        ]);
+        const total = (agg[0] && agg[0].total) || 0;
+        const avg = (agg[0] && agg[0].avg) ? Number(Number(agg[0].avg).toFixed(2)) : 0;
+        if (profile) profile.ratingSummary = { total, avg };
+      } catch (e) {
+        // ignore enrichment errors
+        console.error('getDoctorDetail ratingSummary error:', e);
+      }
+
+      res.set && res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       return res.json({
         success: true,
         data: { user, profile },

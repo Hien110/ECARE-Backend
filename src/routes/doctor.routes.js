@@ -5,6 +5,8 @@ const DoctorController = require("../app/controllers/doctorController");
 const authenticateToken = require("../app/middlewares/authMiddleware");
 
 router.get("/by-user/:userId", DoctorController.getDoctorProfileByUserId);
+// public count of ratings for a doctor (by reviewee)
+router.get("/:userId/ratings/count", DoctorController.getRatingCountByReviewee);
 
 router.use(authenticateToken);
 router.post("/create", DoctorController.createDoctorProfile);
@@ -14,7 +16,7 @@ router.get("/by-id/:profileId", DoctorController.getDoctorProfileById);
 router.post("/schedule/create", DoctorController.createScheduleForDay);
 router.put("/schedule/update", DoctorController.updateScheduleForDay);
 router.post("/schedule/copy", DoctorController.copyScheduleToDays);
-router.get("/ratings/stats", DoctorController.getMyRatingStats);
+// deprecated: removed protected incremental stats route (replaced by public count/summary endpoints)
 router.delete("/schedule/delete", DoctorController.deleteSchedule);
 
 router.get("/:userId/schedule", DoctorController.getDoctorPublicWeeklySchedule); 
