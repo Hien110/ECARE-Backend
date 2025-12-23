@@ -174,6 +174,7 @@ const DoctorController = {
           .json({ success: false, message: "Chưa có hồ sơ" });
 
       await populateProfile(profile);
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       return res.status(200).json({ success: true, data: profile });
     } catch (err) {
       console.error("getMyDoctorProfile error:", err);
@@ -194,9 +195,47 @@ const DoctorController = {
           .json({ success: false, message: "Không tìm thấy hồ sơ" });
 
       await populateProfile(profile);
-      console.log(profile);
-      
-      return res.status(200).json({ success: true, data: profile });
+      // compute live rating summary from Rating collection (source of truth)
+      try {
+        const match = { reviewee: profile.user, status: "active", ratingType: { $in: ["consultation", "doctor_profile"] } };
+        const rows = await Rating.aggregate([
+          { $match: { ...match, reviewee: new mongoose.Types.ObjectId(profile.user) } },
+          { $group: { _id: "$rating", count: { $sum: 1 } } },
+        ]);
+        const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        rows.forEach((r) => (breakdown[r._id] = r.count));
+
+        const agg = await Rating.aggregate([
+          { $match: { ...match, reviewee: new mongoose.Types.ObjectId(profile.user) } },
+          { $group: { _id: null, total: { $sum: 1 }, avg: { $avg: "$rating" }, last: { $max: "$ratedAt" } } },
+        ]);
+        const total = (agg[0] && agg[0].total) || 0;
+        const avg = (agg[0] && agg[0].avg) ? Number(Number(agg[0].avg).toFixed(2)) : 0;
+        const lastRatingAt = agg[0] ? agg[0].last : null;
+
+        // latest 3 reviews
+        const latestReviews = await Rating.find({ reviewee: profile.user, status: "active", ratingType: { $in: ["consultation", "doctor_profile"] } })
+          .populate({ path: "reviewer", select: "fullName avatar" })
+          .sort({ createdAt: -1 })
+          .limit(3)
+          .lean();
+
+        const mapped = latestReviews.map((r) => ({
+          id: r._id,
+          author: r.reviewer?.fullName || "Người dùng ẩn danh",
+          authorAvatar: r.reviewer?.avatar || null,
+          rating: r.rating,
+          content: r.comment || "",
+          date: new Date(r.createdAt).toLocaleDateString("vi-VN"),
+        }));
+
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.status(200).json({ success: true, data: { profile, ratingSummary: { avg, total, breakdown, lastRatingAt }, reviews: mapped } });
+      } catch (e) {
+        console.error("compute rating for profile error:", e);
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.status(200).json({ success: true, data: { profile } });
+      }
     } catch (err) {
       console.error("getDoctorProfileById error:", err);
       return res
@@ -521,55 +560,20 @@ updateScheduleForDay: async (req, res) => {
     }
   },
 
-  // Thống kê đánh giá
-  getMyRatingStats: async (req, res) => {
+  // (removed) getMyRatingStats - replaced by public rating count / summary endpoints
+
+  // Public: get total number of active ratings for a doctor (by reviewee)
+  getRatingCountByReviewee: async (req, res) => {
     try {
-      const doctorId = req.user.userId;
-      await ensureDoctorRole(doctorId);
-
-      const profile = await DoctorProfile.findOne(
-        { user: doctorId },
-        { ratingStats: 1 }
-      ).lean();
-      if (!profile)
-        return res
-          .status(404)
-          .json({ success: false, message: "Chưa có hồ sơ" });
-
-      const {
-        averageRating = 0,
-        totalRatings = 0,
-        lastRatingAt = null,
-      } = profile.ratingStats || {};
-
-      // Tính breakdown theo từng số sao để client hiển thị tỉ lệ 5★, dưới 4★...
-      const rows = await Rating.aggregate([
-        {
-          $match: {
-            reviewee: new mongoose.Types.ObjectId(doctorId),
-            ratingType: "doctor_profile",
-            status: "active",
-          },
-        },
-        { $group: { _id: "$rating", count: { $sum: 1 } } },
-      ]);
-
-      const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-      rows.forEach((r) => {
-        breakdown[r._id] = r.count;
-      });
-
-      return res
-        .status(200)
-        .json({
-          success: true,
-          data: { averageRating, totalRatings, lastRatingAt, breakdown },
-        });
+      const { userId } = req.params;
+      if (!mongoose.isValidObjectId(userId)) {
+        return res.status(400).json({ success: false, message: 'userId không hợp lệ' });
+      }
+      const total = await Rating.countDocuments({ reviewee: new mongoose.Types.ObjectId(userId), status: 'active' });
+      return res.status(200).json({ success: true, data: { total } });
     } catch (err) {
-      console.error("getMyRatingStats error:", err);
-      return res
-        .status(500)
-        .json({ success: false, message: "Không thể lấy thống kê đánh giá" });
+      console.error('getRatingCountByReviewee error:', err);
+      return res.status(500).json({ success: false, message: 'Không thể lấy số lượng đánh giá' });
     }
   },
   getDoctorProfileByUserId: async (req, res) => {
@@ -600,19 +604,72 @@ updateScheduleForDay: async (req, res) => {
           .status(404)
           .json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
 
-      return res.status(200).json({
-        success: true,
-        data: {
-          user: {
-            _id: profile.user?._id,
-            fullName: profile.user?.fullName || "",
-            avatar: profile.user?.avatar || null,
+      // compute rating summary live from Rating collection
+      try {
+        const match = { reviewee: userId, status: "active", ratingType: { $in: ["consultation", "doctor_profile"] } };
+        const rows = await Rating.aggregate([
+          { $match: { ...match, reviewee: new mongoose.Types.ObjectId(userId) } },
+          { $group: { _id: "$rating", count: { $sum: 1 } } },
+        ]);
+        const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        rows.forEach((r) => (breakdown[r._id] = r.count));
+
+        const agg = await Rating.aggregate([
+          { $match: { ...match, reviewee: new mongoose.Types.ObjectId(userId) } },
+          { $group: { _id: null, total: { $sum: 1 }, avg: { $avg: "$rating" }, last: { $max: "$ratedAt" } } },
+        ]);
+        const total = (agg[0] && agg[0].total) || 0;
+        const avg = (agg[0] && agg[0].avg) ? Number(Number(agg[0].avg).toFixed(2)) : 0;
+        const lastRatingAt = agg[0] ? agg[0].last : null;
+
+        // include latest 3 reviews
+        const latestReviews = await Rating.find({ reviewee: userId, status: "active", ratingType: { $in: ["consultation", "doctor_profile"] } })
+          .populate({ path: "reviewer", select: "fullName avatar" })
+          .sort({ createdAt: -1 })
+          .limit(3)
+          .lean();
+
+        const mapped = latestReviews.map((r) => ({
+          id: r._id,
+          author: r.reviewer?.fullName || "Người dùng ẩn danh",
+          authorAvatar: r.reviewer?.avatar || null,
+          rating: r.rating,
+          content: r.comment || "",
+          date: new Date(r.createdAt).toLocaleDateString("vi-VN"),
+        }));
+
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.status(200).json({
+          success: true,
+          data: {
+            user: {
+              _id: profile.user?._id,
+              fullName: profile.user?.fullName || "",
+              avatar: profile.user?.avatar || null,
+            },
+            specializations: profile.specializations ?? "",
+            experience: profile.experience ?? 0,
+            hospitalName: profile.hospitalName ?? "",
+            ratingSummary: { avg, total, breakdown, lastRatingAt },
+            reviews: mapped,
           },
-          specializations: profile.specializations ?? "",
-          experience: profile.experience ?? 0,
-          hospitalName: profile.hospitalName ?? "",
-        },
-      });
+        });
+      } catch (e) {
+        console.error("compute rating for user profile error:", e);
+        return res.status(200).json({
+          success: true,
+          data: {
+            user: {
+              _id: profile.user?._id,
+              fullName: profile.user?.fullName || "",
+              avatar: profile.user?.avatar || null,
+            },
+            specializations: profile.specializations ?? "",
+            experience: profile.experience ?? 0,
+            hospitalName: profile.hospitalName ?? "",
+          },
+        });
+      }
     } catch (err) {
       console.error("getDoctorProfileByUserId error:", err?.stack || err);
       return res
@@ -686,7 +743,7 @@ updateScheduleForDay: async (req, res) => {
 
       const find = Rating.find({
         reviewee: userId,
-        ratingType: "doctor_profile",
+        ratingType: { $in: ["consultation", "doctor_profile"] },
         status: "active",
       })
         .populate({ path: "reviewer", select: "fullName avatar" })
@@ -827,24 +884,33 @@ updateScheduleForDay: async (req, res) => {
     try {
       const { userId } = req.params;
 
-      const profile = await DoctorProfile.findOne({ user: userId }).select("_id ratingStats").lean();
-      if (!profile) return res.status(404).json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
+      // compute rating summary directly from Rating collection (do not rely on DoctorProfile.ratingStats)
+      const exists = await DoctorProfile.findOne({ user: userId }).select("_id").lean();
+      if (!exists) return res.status(404).json({ success: false, message: "Bác sĩ chưa tạo hồ sơ" });
+
+      const match = { reviewee: new mongoose.Types.ObjectId(userId), status: "active", ratingType: { $in: ["consultation", "doctor_profile"] } };
 
       const rows = await Rating.aggregate([
-        { $match: { reviewee: new mongoose.Types.ObjectId(userId), ratingType: "consultation", status: "active" } },
+        { $match: match },
         { $group: { _id: "$rating", count: { $sum: 1 } } },
       ]);
 
       const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
       rows.forEach((r) => (breakdown[r._id] = r.count));
 
-      const { averageRating = 0, totalRatings = 0, lastRatingAt } =
-        profile.ratingStats || {};
+      const agg = await Rating.aggregate([
+        { $match: match },
+        { $group: { _id: null, total: { $sum: 1 }, avg: { $avg: "$rating" }, last: { $max: "$ratedAt" } } },
+      ]);
+      const total = (agg[0] && agg[0].total) || 0;
+      const avg = (agg[0] && agg[0].avg) ? Number(Number(agg[0].avg).toFixed(2)) : 0;
+      const lastRatingAt = agg[0] ? agg[0].last : null;
+
       return res.status(200).json({
         success: true,
         data: {
-          avg: averageRating,
-          total: totalRatings,
+          avg,
+          total,
           breakdown,
           lastRatingAt,
         },
